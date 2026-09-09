@@ -761,6 +761,8 @@ function buildVM(item) {
     // "Público" = siempre publicación existente — material guarda el
     // permalink del post (ver services/pedidos.js). Link para poder abrirla.
     publicacionLink: item.visibilidad === 'PUBLICO' ? (item.material || '') : '',
+    // Para el mock de plataforma en el panel de abajo (ver renderMockPost).
+    plataformas: parseListaClient(item.redes).map((r) => (r === 'instagram' ? 'Instagram' : 'Facebook')),
     copy: item.copy, linkDestino: item.link_destino,
     objetivosLabel: item.objetivos.join(' + '), audienciaLabel, presupuesto: item.presupuesto, presupuestoLabel: fmtMoney(item.presupuesto),
     tags, estadoLabel: isConfirmed ? 'Confirmada' : (isManualDone ? 'Hecha a mano' : (isDesestimada ? 'Desestimada' : (isDevueltaPm ? 'Devuelta para corrección' : (isPendienteManual ? 'Falta celda manual' : 'Pendiente')))),
@@ -986,9 +988,17 @@ function avisoMinimo(vm) {
 }
 
 function renderExpandContent(vm) {
-  const previewImg = vm.imagenPreview
-    ? `<img src="${esc(vm.imagenPreview)}" loading="lazy" data-action="abrir-lightbox" data-url="${esc(vm.imagenPreview)}" style="width:96px;height:96px;object-fit:cover;border-radius:var(--radius-md);flex:none;cursor:zoom-in" title="Ver más grande">`
-    : `<div style="width:96px;height:96px;border-radius:var(--radius-md);background:var(--color-bg);border:1px solid var(--color-divider);display:flex;align-items:center;justify-content:center;color:var(--color-neutral-500);flex:none"><i class="ph ph-image" style="font-size:26px"></i></div>`;
+  // Mock de cómo se ve en Facebook/Instagram (mismo componente que el
+  // preview de "Pedido de Anuncios", ver renderMockPost) — reemplaza la
+  // miniatura chica + el cuadro de copy suelto que había antes acá.
+  const plataformasVm = vm.plataformas && vm.plataformas.length ? vm.plataformas : ['Facebook'];
+  const mockPosts = plataformasVm.map((plataforma) => renderMockPost({
+    nombrePagina: vm.activoNombre,
+    copy: vm.copy,
+    mediaUrl: vm.imagenPreview,
+    lightboxUrl: vm.imagenPreview,
+    plataforma,
+  })).join('<div style="height:10px"></div>');
   const categorias = [
     vm.visibilidadLabel,
     vm.formato,
@@ -1021,13 +1031,10 @@ function renderExpandContent(vm) {
     <button class="btn btn-ghost" data-action="editarpauta-abrir" data-id="${esc(vm.id)}" style="font-size:12px;color:var(--color-neutral-400)"><i class="ph ph-pencil-simple"></i> Editar</button>` : '';
   const header = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:16px">
-      <div style="display:flex;gap:14px;align-items:flex-start">
-        ${previewImg}
-        <div>
-          <h4 style="margin:0 0 4px">${esc(vm.campana)}${vm.contenido ? ' - ' + esc(vm.contenido) : ''}</h4>
-          <div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px">Eje: ${esc(vm.eje)} · Fecha: ${esc(vm.fecha)} · ${esc(vm.duracionLabel)}</div>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">${categorias}</div>
-        </div>
+      <div>
+        <h4 style="margin:0 0 4px">${esc(vm.campana)}${vm.contenido ? ' - ' + esc(vm.contenido) : ''}</h4>
+        <div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px">Eje: ${esc(vm.eje)} · Fecha: ${esc(vm.fecha)} · ${esc(vm.duracionLabel)}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${categorias}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
         ${vm.publicacionLink ? `<a href="${esc(vm.publicacionLink)}" target="_blank" rel="noopener" style="font-size:13px;display:flex;gap:6px;align-items:center"><i class="ph ph-arrow-square-out"></i>Ver publicación</a>` : ''}
@@ -1037,7 +1044,7 @@ function renderExpandContent(vm) {
         ${desestimarTrigger}
       </div>
     </div>
-    <p style="font-size:13px;color:var(--color-neutral-300);background:var(--color-bg);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:10px 12px;margin:0 0 20px">${esc(vm.copy)}</p>
+    <div style="max-width:340px;margin-bottom:20px">${mockPosts}</div>
   `;
 
   const desestimarPanel = renderDesestimarPanel(vm, desestimarAbierto);
@@ -1332,7 +1339,7 @@ function render() {
 
   document.getElementById('lista-pendientes').innerHTML = pendientes.length
     ? pendientes.map((vm) => renderItemRow(vm, COLS_PENDIENTES, false)).join('')
-    : '<p style="color:var(--color-neutral-500);padding:16px 10px">No hay piezas esperando validación. Las que se carguen desde "Pedido de Pauta" aparecen acá.</p>';
+    : '<p style="color:var(--color-neutral-500);padding:16px 10px">No hay piezas esperando validación. Las que se carguen desde "Pedido de Anuncios" aparecen acá.</p>';
 
   const historialWrap = document.getElementById('historial-toggle-wrap');
   historialWrap.hidden = historial.length === 0;
@@ -2266,7 +2273,7 @@ async function cargarPostsPedidoV2() {
 }
 
 function renderTabPedido2() {
-  document.getElementById('pd2-titulo').textContent = state.pd2ModoDirecto ? 'Crear Anuncio' : 'Pedido de Pauta';
+  document.getElementById('pd2-titulo').textContent = state.pd2ModoDirecto ? 'Crear Anuncio' : 'Pedido de Anuncios';
 
   if (!state.pd2Proyecto) state.pd2Proyecto = state.pdProyecto || state.pdProyectos[0] || null;
   if (!state.pd2ActivoKey) {
@@ -3127,32 +3134,111 @@ async function verificarMaterialesBulkV2() {
   renderResultadoBulkV2();
 }
 
+// "AB" a partir de "Activo de Prueba" — el avatar del mock de abajo
+// (no hay foto de perfil real de la Página disponible del lado del front).
+function inicialesDe(nombre) {
+  const palabras = String(nombre || '').trim().split(/\s+/).filter(Boolean);
+  return ((palabras[0] ? palabras[0][0] : '') + (palabras[1] ? palabras[1][0] : '')).toUpperCase();
+}
+
+// Simula cómo se ve el anuncio en Facebook o Instagram (foto de perfil +
+// nombre de página + copy + material) — a diferencia del preview viejo (una
+// miniatura suelta con un ícono de ok/error), esto es lo que pidió el
+// usuario: "que simule ser la publicación... interfaz de plataforma", con
+// el look de cada red (orden distinto: Instagram pone el copy DESPUÉS de la
+// imagen, Facebook antes). Colores fijos de cada plataforma a propósito (no
+// los del tema de PAUTADOR): esto simula la plataforma, no la app.
+function renderMockPost(o) {
+  const lightbox = o.lightboxUrl ? ' data-action="abrir-lightbox" data-url="' + esc(o.lightboxUrl) + '" style="width:100%;max-height:320px;object-fit:cover;display:block;cursor:zoom-in" title="Ver más grande"' : ' style="width:100%;max-height:320px;object-fit:cover;display:block"';
+  const media = o.mediaUrl
+    ? (o.esVideo
+      ? '<video src="' + esc(o.mediaUrl) + '" style="width:100%;max-height:320px;object-fit:cover;display:block;background:#000" controls></video>'
+      : '<img src="' + esc(o.mediaUrl) + '"' + lightbox + '>')
+    : '<div style="height:160px;background:#f0f2f5;display:flex;align-items:center;justify-content:center;color:#8a8d91"><i class="ph ph-image" style="font-size:28px"></i></div>';
+  const badge = o.badge ? '<span style="position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);color:#fff;font-size:10px;padding:2px 6px;border-radius:10px">' + esc(o.badge) + '</span>' : '';
+  const iniciales = esc(inicialesDe(o.nombrePagina));
+
+  if (o.plataforma === 'Instagram') {
+    const avatar = '<div style="width:34px;height:34px;border-radius:50%;padding:2px;background:linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888);flex:none">'
+      + '<div style="width:100%;height:100%;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#262626">' + (iniciales || '<i class="ph ph-storefront"></i>') + '</div>'
+      + '</div>';
+    return '<div style="border:1px solid #dbdbdb;border-radius:8px;overflow:hidden;background:#fff;font-family:Helvetica,Arial,sans-serif;color:#262626">'
+      + '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px">'
+      +   avatar
+      +   '<div style="line-height:1.2;flex:1;min-width:0">'
+      +     '<div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(o.nombrePagina || 'tu_pagina') + '</div>'
+      +     '<div style="font-size:11px;color:#8e8e8e">Publicidad</div>'
+      +   '</div>'
+      +   '<i class="ph ph-dots-three" style="font-size:18px"></i>'
+      + '</div>'
+      + '<div style="position:relative">' + media + badge + '</div>'
+      + '<div style="display:flex;align-items:center;gap:14px;padding:9px 12px 4px;font-size:20px">'
+      +   '<i class="ph ph-heart"></i><i class="ph ph-chat-circle"></i><i class="ph ph-paper-plane-tilt"></i>'
+      +   '<span style="flex:1"></span><i class="ph ph-bookmark-simple"></i>'
+      + '</div>'
+      + (o.copy ? '<div style="padding:2px 12px 12px;font-size:13px;line-height:1.35;word-break:break-word"><strong>' + esc(o.nombrePagina || 'tu_pagina') + '</strong> ' + esc(o.copy) + '</div>' : '<div style="padding-bottom:10px"></div>')
+      + '</div>';
+  }
+
+  return '<div style="border:1px solid #dddfe2;border-radius:8px;overflow:hidden;background:#fff;font-family:Helvetica,Arial,sans-serif;color:#050505">'
+    + '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px">'
+    +   '<div style="width:34px;height:34px;border-radius:50%;background:#1877f2;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none">' + (iniciales || '<i class="ph ph-storefront"></i>') + '</div>'
+    +   '<div style="line-height:1.25;min-width:0">'
+    +     '<div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(o.nombrePagina || 'Tu página') + '</div>'
+    +     '<div style="font-size:11px;color:#65676b">Patrocinado · <i class="ph ph-globe" style="font-size:10px"></i></div>'
+    +   '</div>'
+    + '</div>'
+    + (o.copy ? '<div style="padding:0 12px 10px;font-size:13px;line-height:1.35;white-space:pre-wrap;word-break:break-word">' + esc(o.copy) + '</div>' : '')
+    + '<div style="position:relative">' + media + badge + '</div>'
+    + '<div style="display:flex;justify-content:space-around;padding:7px 4px;font-size:12px;color:#65676b;border-top:1px solid #eee">'
+    +   '<span><i class="ph ph-thumbs-up"></i> Me gusta</span>'
+    +   '<span><i class="ph ph-chat-circle"></i> Comentar</span>'
+    +   '<span><i class="ph ph-share-fat"></i> Compartir</span>'
+    + '</div>'
+    + '</div>';
+}
+
 function renderPreviewsBulkV2() {
   const previews = state.pd2BulkPreviews;
   if (!previews) return '';
+  const activo = (state.pdActivos || []).find((a) => a.activo_key === state.pd2ActivoKey);
+  const nombrePagina = activo ? activo.activo : '';
   const unaSola = previews.length === 1;
   const tarjetas = previews.map(function (p) {
-    const cuerpo = p.ok
-      ? (p.previewUrl
-        ? '<img src="' + esc(p.previewUrl) + '" style="width:100%;height:78px;object-fit:contain;background:var(--color-bg)">'
-        : '<div style="height:78px;display:flex;align-items:center;justify-content:center;color:var(--color-neutral-500)"><i class="ph ph-check-circle" style="font-size:20px"></i></div>')
-      : '<div style="height:78px;display:flex;align-items:center;justify-content:center;color:var(--color-warning, #d08a1e)"><i class="ph ph-warning" style="font-size:20px"></i></div>';
-    const pie = p.ok
-      ? (p.carruselCantidad ? 'Carrusel · ' + p.carruselCantidad + ' imágenes' : (p.tipo === 'video' ? 'Video' : (p.tipo === 'imagen' ? 'Imagen' : p.tipo)) + (p.bytes ? ' · ' + fmtPeso(p.bytes) : ''))
-      : p.error;
-    const etiqueta = unaSola ? esc(pie) : '<strong>Pieza ' + (p.i + 1) + '</strong> — ' + esc(pie);
-    return '<div style="border:1px solid ' + (p.ok ? 'var(--color-divider)' : 'var(--color-warning, #d08a1e)') + ';border-radius:var(--radius-md);overflow:hidden">'
-      + cuerpo
-      + '<div style="padding:6px 8px;font-size:11px;color:var(--color-neutral-' + (p.ok ? '500' : '300') + ')">' + etiqueta + '</div>'
-      + '</div>';
+    if (!p.ok) {
+      return '<div style="border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);padding:14px;font-size:12px;color:var(--color-neutral-300)">'
+        + (unaSola ? '' : '<strong>Pieza ' + (p.i + 1) + '</strong><br>') + esc(p.error) + '</div>';
+    }
+    const item = state.pd2BulkItems[p.i];
+    const copyEl = document.getElementById('pd2bulk' + p.i + '-copy');
+    const copy = p.tipo === 'publicación existente'
+      ? ((item && item.postSeleccionado && item.postSeleccionado.caption) || '')
+      : (copyEl ? copyEl.value.trim() : '');
+    // Publicación existente: la red es la del post elegido (ya se sabe cuál
+    // es). Material subido: puede ir a Facebook, Instagram o ambas a la vez
+    // (state.pd2Redes) — se muestra un mock por cada una, con el look real
+    // de esa red (pedido del usuario: "que simule Instagram cuando es
+    // Instagram una de las redes").
+    const plataformas = p.tipo === 'publicación existente'
+      ? [(item && item.postSeleccionado && item.postSeleccionado.plataforma) || 'Facebook']
+      : ((state.pd2Redes && state.pd2Redes.length) ? state.pd2Redes.map((r) => (r === 'instagram' ? 'Instagram' : 'Facebook')) : ['Facebook']);
+    const post = plataformas.map((plataforma) => renderMockPost({
+      nombrePagina,
+      copy,
+      mediaUrl: p.previewUrl,
+      esVideo: p.tipo === 'video',
+      badge: p.carruselCantidad ? '1/' + p.carruselCantidad : '',
+      plataforma,
+    })).join('<div style="height:10px"></div>');
+    return unaSola ? post : ('<div>' + post + '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:4px">Pieza ' + (p.i + 1) + '</div></div>');
   }).join('');
 
   const fallan = previews.filter(function (p) { return !p.ok; }).length;
   const cabecera = fallan
-    ? '<div class="error" style="margin-bottom:8px">' + fallan + ' pieza(s) con el material mal: corregí el link y verificá de nuevo. No se creó nada.</div>'
-    : '<div style="margin-bottom:8px;font-size:12px;color:var(--color-neutral-400)">Materiales verificados. Revisá que sean las piezas correctas y confirmá.</div>';
+    ? '<div class="error" style="margin-bottom:10px">' + fallan + ' pieza(s) con el material mal: corregí el link y verificá de nuevo. No se creó nada.</div>'
+    : '<div style="margin-bottom:10px;font-size:12px;color:var(--color-neutral-400)">Así se va a ver en Meta. Revisá que sean las piezas correctas y confirmá.</div>';
 
-  return cabecera + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:12px">' + tarjetas + '</div>';
+  return cabecera + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:14px">' + tarjetas + '</div>';
 }
 
 // Banner que queda en la pantalla de elegir modo después de un pedido
