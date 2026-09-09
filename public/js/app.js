@@ -1161,7 +1161,7 @@ function renderExpandContent(vm) {
       <select class="input" id="pto-edit-${esc(vm.id)}" style="width:100%">
         ${PRESUPUESTO_TIERS.map((v) => `<option value="${v}" ${v === vm.presupuesto ? 'selected' : ''}>${labelPresupuesto(v)}</option>`).join('')}
       </select>
-      <button class="btn btn-secondary" data-action="guardar-presupuesto" data-id="${esc(vm.id)}" style="width:100%">Editar presupuesto total</button>
+      <button class="btn btn-secondary" data-action="guardar-presupuesto" data-id="${esc(vm.id)}" style="width:100%">Cambiar Presupuesto Total</button>
     </div>` : '';
   // A diferencia del presupuesto (monto exacto, solo Implementador/Admin —
   // el PM define Intensidad, no el número), desestimar un pedido propio sí
