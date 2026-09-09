@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAUTADOR</title>
+<link rel="stylesheet" href="/css/nocturne.css">
+<link rel="stylesheet" href="/css/prosumia.css">
+<link rel="stylesheet" href="/css/app.css">
+<script src="https://unpkg.com/@phosphor-icons/web"></script>
+</head>
+<body>
+
+  <!-- Pantalla 1 · Login: login "fake" por mail, interino mientras Sistemas
+       da de alta el OAuth Client de Google (ver services/usuarios.js). -->
+  <div id="pantalla-login" class="pantalla-onboarding" hidden>
+    <div class="pantalla-onboarding-card">
+      <img src="/img/prosumia-logo.svg" alt="Prosumia" style="height:26px;margin-bottom:18px">
+      <h4 style="margin:0 0 4px">Iniciar sesión</h4>
+      <p style="margin:0 0 20px;font-size:13px;color:var(--color-neutral-500)" id="pantalla-login-subtitulo">Entrá con tu mail de Prosumia.</p>
+      <p id="pantalla-login-error" class="error" style="margin:0 0 14px" hidden></p>
+      <a href="/auth/google" id="pantalla-login-google" class="btn btn-primary" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none" hidden>
+        <i class="ph ph-google-logo"></i> Continuar con Google
+      </a>
+      <form id="pantalla-login-form" hidden>
+        <input type="email" class="input" id="pantalla-login-email" placeholder="nombre.apellido@prosumia.la" autocomplete="email" style="width:100%;margin-bottom:10px">
+        <button type="submit" class="btn btn-primary" id="pantalla-login-submit" style="width:100%">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Pantalla 2 · Elegir Proyecto. Restringe qué se ve después (Validación
+       solo muestra pedidos de este proyecto). Implementador ve un globo con
+       pendientes por proyecto; Administrador tiene "Ver todos los proyectos". -->
+  <div id="pantalla-proyecto" class="pantalla-onboarding" hidden>
+    <div class="pantalla-onboarding-card">
+      <p class="pantalla-onboarding-eyebrow" id="pantalla-proyecto-usuario"></p>
+      <h4 style="margin:0 0 4px">¿En qué Proyecto vas a trabajar?</h4>
+      <p style="margin:0 0 20px;font-size:13px;color:var(--color-neutral-500)">Vas a ver y pautar solo lo de este proyecto — se puede cambiar después con "Cambiar de Proyecto".</p>
+      <div id="pantalla-proyecto-lista" class="pantalla-onboarding-lista"></div>
+      <div style="margin-top:22px;padding-top:16px;border-top:1px dashed var(--color-divider)">
+        <label style="display:block;font-size:11px;color:var(--color-neutral-400);margin-bottom:6px">Versión de prueba — cambiar de usuario</label>
+        <select class="input" id="pantalla-proyecto-usuario-select" style="width:100%"></select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pantalla 3 · Oficial / Informativo. Restringe qué Tipo de campaña
+       aparece después (equiv_tipo.ecosistema). -->
+  <div id="pantalla-ecosistema" class="pantalla-onboarding" hidden>
+    <div class="pantalla-onboarding-card">
+      <p class="pantalla-onboarding-eyebrow" id="pantalla-ecosistema-contexto"></p>
+      <h4 style="margin:0 0 4px">¿En qué vas a trabajar?</h4>
+      <p style="margin:0 0 20px;font-size:13px;color:var(--color-neutral-500)">Define qué Tipos de campaña vas a poder elegir después.</p>
+      <div id="pantalla-ecosistema-lista" class="pantalla-onboarding-lista"></div>
+    </div>
+  </div>
+
+  <div id="app-shell">
+  <div class="nav">
+    <button type="button" class="nav-brand" id="nav-brand-reset" title="Volver al inicio" style="display:flex;align-items:center;gap:10px;background:none;border:none;padding:0;cursor:pointer;font:inherit;color:inherit;text-align:left">
+      <img src="/img/prosumia-logo.svg" alt="Prosumia" style="height:22px">
+      <span style="width:1px;height:18px;background:var(--color-divider)"></span>
+      Pautador
+      <span style="font-size:12px;font-weight:400;color:var(--color-neutral-500)">Meta Ads · Pauta política</span>
+    </button>
+    <button type="button" class="tag" id="nav-proyecto-actual" data-action="cambiar-de-proyecto" title="Cambiar de Proyecto" style="cursor:pointer"></button>
+    <button type="button" class="tag" id="nav-ecosistema-actual" data-action="toggle-ecosistema" title="Cambiar de ecosistema" style="cursor:pointer"></button>
+    <button type="button" class="tag tag-accent" id="pendientes-count" data-action="ir-a-validacion" style="cursor:pointer;border:none;font-family:inherit">0 pendientes</button>
+    <select class="input filtro" id="usuario-actual" title="Actuando como"></select>
+  </div>
+
+  <div id="toast-area"></div>
+
+  <div class="tabs">
+    <button class="tab-btn" data-tab="pedido2">Pedido de Pauta</button>
+    <button class="tab-btn" data-tab="pendientes">Validación de Anuncios</button>
+    <button class="tab-btn" data-tab="crear">Crear Anuncios</button>
+    <button class="tab-btn" data-tab="admin">Agregar Activos / Audiencias</button>
+  </div>
+
+  <div id="estado-carga" style="padding:20px 28px;color:var(--color-neutral-500)" hidden>Cargando…</div>
+
+  <!-- Pedido de Pauta — se completa en 5 módulos que se confirman de a
+       uno; el siguiente recién aparece cuando el anterior está OK. Esta
+       misma pantalla también sirve para "Crear Anuncios" (Implementador,
+       pauta directa sin pasar por la cola de pedidos) — el modo lo decide
+       state.pd2ModoDirecto, ver cambiarTab(). Individual y "múltiples
+       anuncios" son el mismo flujo (Módulo 4, "Cantidad de piezas"); CSV
+       es su propio modo, sin módulos (es una tabla, no un formulario). -->
+  <div id="tab-pedido2" style="padding:20px 28px 0" hidden>
+    <div class="expand-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:16px;flex-wrap:wrap">
+        <div>
+          <h5 style="margin:0" id="pd2-titulo">Pedido de Pauta</h5>
+          <div id="pd2-activo-nota" style="font-size:11px;color:var(--color-neutral-400);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw"></div>
+        </div>
+        <div class="tabs" id="pd2-modo-carga-wrap" style="padding:0;border:none" hidden>
+          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="anuncios">Pedido de Anuncios</button>
+          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="csv">Cargar CSV</button>
+        </div>
+      </div>
+
+      <div id="pd2-resultado-final" hidden style="margin-bottom:14px;background:var(--color-surface);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h5 style="margin:0">Último pedido</h5>
+          <button type="button" class="btn btn-icon btn-ghost" data-action="pd2-resultado-final-cerrar"><i class="ph ph-x"></i></button>
+        </div>
+        <div id="pd2-resultado-final-body"></div>
+      </div>
+
+      <!-- Una sola tarjeta cubre 1 a 10 piezas (ver Módulo 4, "Cantidad de
+           piezas") — individual y "múltiples anuncios" son el mismo flujo
+           acá, no dos modos separados como en v1. -->
+      <div id="pd2-modo-elegir" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
+        <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="anuncios" style="padding:22px 20px;text-align:left">
+          <i class="ph ph-file-text" style="font-size:26px;color:var(--color-accent)"></i>
+          <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px">Pedido de Anuncios</div>
+          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Una pieza o varias juntas — se elige la cantidad en el Módulo 4.</div>
+        </button>
+        <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" style="padding:22px 20px;text-align:left">
+          <i class="ph ph-table" style="font-size:26px;color:var(--color-accent)"></i>
+          <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px">Cargar CSV</div>
+          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Para casos especiales: subí un CSV con varias piezas juntas.</div>
+        </button>
+      </div>
+
+      <!-- Modo CSV: no comparte nada de los módulos — cada fila del CSV trae
+           sus propios campos, acá solo se elige Proyecto/Activo (una vez
+           para todo el archivo) y se sube el archivo. -->
+      <div id="pd-csv-wrap" hidden>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+          <div class="field"><label>Proyecto</label><select class="input" id="pd-csv-proyecto"></select></div>
+          <div class="field"><label>Activo</label><select class="input" id="pd-csv-activo"></select></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap">
+          <button type="button" class="btn btn-secondary" data-action="pd-csv-modelo"><i class="ph ph-download-simple"></i> Descargar modelo</button>
+          <label class="btn btn-secondary" style="cursor:pointer;margin:0">
+            <i class="ph ph-upload-simple"></i> Subir CSV
+            <input type="file" accept=".csv,text/csv" id="pd-csv-archivo" style="display:none">
+          </label>
+          <span style="font-size:11px;color:var(--color-neutral-500)">Cada fila es una pieza — el material de cada una es un link a su propio Drive.</span>
+        </div>
+        <p id="pd-csv-error" class="error" style="margin:10px 0 0" hidden></p>
+        <div id="pd-csv-preview" style="margin-top:14px"></div>
+      </div>
+
+      <div id="pd2-modulos-wrap" hidden>
+      <!-- Módulo 1 -->
+      <div class="field" id="pd2-modulo-1" style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <strong style="font-family:var(--font-heading);font-size:14px">1. Campaña y Objetivo</strong>
+          <span id="pd2-modulo-1-resumen" style="font-size:12px;color:var(--color-neutral-500)" hidden></span>
+        </div>
+        <div id="pd2-modulo-1-cuerpo">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+            <div class="field"><label>Proyecto</label><select class="input" id="pd2-proyecto"></select></div>
+            <div class="field"><label>Activo</label><select class="input" id="pd2-activo"></select></div>
+            <div class="field"><label>Tipo</label><select class="input" id="pd2-tipo"></select></div>
+            <div class="field"><label>Eje</label><select class="input" id="pd2-eje"></select></div>
+          </div>
+          <!-- Línea es por pieza (Módulo 5, una por Material/Copy) — acá no
+               hay una sola "Línea" compartida que tenga sentido para 1 a 10
+               piezas juntas. -->
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(200px,1fr));gap:12px;margin-top:12px">
+            <div class="field"><label>Campaña / Comunicación</label><input class="input" id="pd2-campana" list="pd-campana-lista" placeholder="Elegí una existente o escribí una nueva"><datalist id="pd-campana-lista"></datalist></div>
+            <div class="field"><label>Objetivo (uno o más)</label><div id="pd2-objetivo-wrap"></div></div>
+          </div>
+          <p id="pd2-modulo-1-error" class="error" style="margin:10px 0 0" hidden></p>
+          <div style="display:flex;justify-content:flex-end;margin-top:12px">
+            <button class="btn btn-primary" data-action="pd2-confirmar-modulo" data-id="1">Confirmar y seguir</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Módulo 2 -->
+      <div class="field" id="pd2-modulo-2" style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:12px" hidden>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <strong style="font-family:var(--font-heading);font-size:14px">2. Audiencia</strong>
+          <span id="pd2-modulo-2-resumen" style="font-size:12px;color:var(--color-neutral-500)" hidden></span>
+        </div>
+        <div id="pd2-modulo-2-cuerpo">
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(200px,1fr));gap:12px">
+            <div class="field">
+              <label>Audiencia principal</label>
+              <div style="display:flex;gap:8px;align-items:flex-start">
+                <div id="pd2-audiencia-wrap" style="flex:1;min-width:0"></div>
+                <div id="pd2-otra-audiencia-wrap" hidden style="flex:1;min-width:0"><input class="input" id="pd2-otra-audiencia" placeholder="Descripción de la audiencia"></div>
+              </div>
+            </div>
+            <div class="field">
+              <label>Audiencias Secundarias <span style="font-weight:400;color:var(--color-neutral-500)">(opcional)</span></label>
+              <div style="display:flex;gap:8px;align-items:flex-start">
+                <div id="pd2-refuerzo-wrap" style="flex:1;min-width:0"></div>
+                <div id="pd2-otras-refuerzo-wrap" hidden style="flex:1;min-width:0"><input class="input" id="pd2-otras-refuerzo" placeholder="Descripción de la audiencia"></div>
+              </div>
+            </div>
+          </div>
+          <p id="pd2-modulo-2-error" class="error" style="margin:10px 0 0" hidden></p>
+          <div style="display:flex;justify-content:flex-end;margin-top:12px">
+            <button class="btn btn-primary" data-action="pd2-confirmar-modulo" data-id="2">Confirmar y seguir</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Módulo 3 -->
+      <div class="field" id="pd2-modulo-3" style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:12px" hidden>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <strong style="font-family:var(--font-heading);font-size:14px">3. Fechas</strong>
+          <span id="pd2-modulo-3-resumen" style="font-size:12px;color:var(--color-neutral-500)" hidden></span>
+        </div>
+        <div id="pd2-modulo-3-cuerpo">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+            <div class="field"><label>Fecha inicio</label><input class="input" type="date" id="pd2-fecha-inicio"></div>
+            <div class="field"><label>Duración</label>
+              <select class="input" id="pd2-duracion">
+                <option value="">— elegir —</option>
+                <option value="1">1 día</option>
+                <option value="3">3 días</option>
+                <option value="5">5 días</option>
+                <option value="7">7 días</option>
+                <option value="10">10 días</option>
+                <option value="15">15 días</option>
+                <option value="30">30 días</option>
+                <option value="fin-de-mes">Hasta fin de mes</option>
+              </select>
+            </div>
+            <div class="field"><label>Fecha fin</label><input class="input" type="date" id="pd2-fecha-fin"></div>
+          </div>
+          <p id="pd2-modulo-3-error" class="error" style="margin:10px 0 0" hidden></p>
+          <div style="display:flex;justify-content:flex-end;margin-top:12px">
+            <button class="btn btn-primary" data-action="pd2-confirmar-modulo" data-id="3">Confirmar y seguir</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Módulo 4 -->
+      <div class="field" id="pd2-modulo-4" style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:12px" hidden>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <strong style="font-family:var(--font-heading);font-size:14px">4. Tipo y Cantidad de Piezas</strong>
+          <span id="pd2-modulo-4-resumen" style="font-size:12px;color:var(--color-neutral-500)" hidden></span>
+        </div>
+        <div id="pd2-modulo-4-cuerpo">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+            <div class="field"><label>Visibilidad</label>
+              <select class="input" id="pd2-visibilidad">
+                <option value="DARK">Oculto (crear anuncio nuevo)</option>
+                <option value="PUBLICO">Público (publicar contenido existente)</option>
+              </select>
+            </div>
+            <div class="field" id="pd2-formato-wrap"><label>Formato</label><select class="input" id="pd2-formato"></select></div>
+            <div class="field"><label>Red</label><div id="pd2-redes-inner"></div></div>
+            <div class="field"><label>Placement</label><div id="pd2-placements-wrap"></div></div>
+            <div class="field">
+              <label>Cantidad de piezas</label>
+              <select class="input" id="pd2-cantidad-piezas">
+                <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+                <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+                <option value="10">10</option>
+              </select>
+            </div>
+            <!-- Solo "Crear Anuncios": presupuesto por tramos, default que se
+                 aplica a las piezas al crearlas (después se puede ajustar
+                 pieza por pieza, ver Módulo 5). Pedido de Pauta (PM) no elige
+                 nada acá — el servidor lo resuelve solo (Tipo × tamaño de
+                 Audiencia) y el PM no lo ve. -->
+            <div class="field" id="pd2-presupuesto-default-wrap" hidden><label id="pd2-presupuesto-default-label">Presupuesto</label><select class="input" id="pd2-presupuesto-default"></select></div>
+          </div>
+          <div class="field" style="margin-top:12px"><label>Link de destino <span style="font-weight:400;color:var(--color-neutral-500)">(opcional, obligatorio con Objetivo Tráfico)</span></label><input class="input" id="pd2-link-destino"></div>
+          <p id="pd2-modulo-4-error" class="error" style="margin:10px 0 0" hidden></p>
+          <div style="display:flex;justify-content:flex-end;margin-top:12px">
+            <button class="btn btn-primary" data-action="pd2-confirmar-modulo" data-id="4">Confirmar y seguir</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Módulo 5 -->
+      <div class="field" id="pd2-modulo-5" style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:12px" hidden>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <strong style="font-family:var(--font-heading);font-size:14px">5. Piezas</strong>
+        </div>
+        <div id="pd2-modulo-5-cuerpo">
+          <!-- Siempre una tarjeta por pieza (Material/Copy/Línea/Audiencia),
+               1 a 10 según lo elegido en el Módulo 4 — mismo criterio que
+               pd-bulk-items de v1, ids propios pd2bulk*, ajustado
+               dinámicamente al cambiar la Cantidad (ver
+               ajustarCantidadPiezasV2 en app.js). -->
+          <div id="pd2-bulk-items" style="display:flex;flex-direction:column;gap:16px"></div>
+          <p id="pd2-bulk-error" class="error" style="margin:14px 0 0" hidden></p>
+          <div id="pd2-bulk-resultado" style="margin-top:10px;font-size:13px"></div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:14px">
+            <button class="btn btn-primary" id="pd2-bulk-crear" data-action="pd2-bulk-crear">Ver preview</button>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-pendientes" style="padding:20px 28px 0" hidden>
+    <div class="lista-scroll">
+      <div class="grid-header">
+        <div></div><div>Código</div><div>Proyecto</div><div>Activo</div><div>Eje</div><div>Campaña</div><div>Contenido</div><div>Tipo</div><div>Objetivo(s)</div><div>Audiencia</div><div>Presupuesto</div><div></div>
+      </div>
+      <div id="lista-pendientes"></div>
+    </div>
+
+    <div id="historial-toggle-wrap" style="margin-top:28px" hidden>
+      <button class="btn btn-ghost" id="historial-toggle" style="font-size:13px">
+        <i class="ph ph-caret-right"></i>
+        <span id="historial-label">Historial (0)</span>
+      </button>
+      <div class="lista-scroll" style="margin-top:8px">
+        <div id="lista-historial" hidden></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-admin" style="padding:20px 28px 0" hidden>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px">
+
+      <div class="expand-panel">
+        <h5 style="margin:0 0 4px">+ Activo</h5>
+        <p style="font-size:12px;color:var(--color-neutral-500);margin:0 0 14px">
+          El activo se carga sobre un Proyecto que ya existe. Dar de alta un proyecto nuevo se hace
+          aparte: arrastra permisos, códigos y cuentas de Meta que no se resuelven desde acá.
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="field" style="grid-column:1 / -1">
+            <label>Proyecto</label>
+            <select class="input" id="adm-activo-proyecto"></select>
+          </div>
+          <div class="field" style="grid-column:1 / -1"><label>Nombre del activo <span style="font-weight:400;color:var(--color-neutral-500)">(opcional)</span></label><input class="input" id="adm-activo-nombre" placeholder="Ej: Gaceta Patagónica"></div>
+          <div class="field"><label>Ad Account ID</label><input class="input" id="adm-activo-cuenta" placeholder="act_..."></div>
+          <div class="field"><label>Page ID</label><input class="input" id="adm-activo-page"></div>
+          <div class="field"><label>IG Actor ID <span style="font-weight:400;color:var(--color-neutral-500)">(opcional)</span></label><input class="input" id="adm-activo-ig"></div>
+          <div class="field"><label>Provincia</label><input class="input" id="adm-activo-provincia"></div>
+          <div class="field"><label>Duración por defecto (días)</label><input class="input" type="number" min="1" id="adm-activo-duracion" value="7"></div>
+          <div class="field"><label>Categoría</label>
+            <select class="input" id="adm-activo-categoria">
+              <option value="POLITICAL">Política</option>
+              <option value="">Ninguna</option>
+            </select>
+          </div>
+        </div>
+        <p id="adm-activo-error" class="error" style="margin:12px 0 0" hidden></p>
+        <p id="adm-activo-exito" style="margin:12px 0 0;font-size:13px;color:var(--color-accent-2-600)" hidden></p>
+        <button class="btn btn-primary" data-action="adm-crear-activo" style="margin-top:14px">Crear activo</button>
+        <div id="adm-activos-lista" style="margin-top:18px;font-size:12px;color:var(--color-neutral-400)"></div>
+      </div>
+
+      <div class="expand-panel">
+        <h5 style="margin:0 0 4px">+ Audiencia</h5>
+        <p style="font-size:12px;color:var(--color-neutral-500);margin:0 0 14px">
+          Se guarda ligada al Activo elegido — con 2 o más audiencias en el mismo Activo, el Pedido de
+          Pauta ya deja armar una matriz entre ellas.
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="field" style="grid-column:1 / -1"><label>Activo</label><select class="input" id="adm-aud-activo"></select></div>
+          <div class="field"><label>Código</label><input class="input" id="adm-aud-codigo" placeholder="Ej: JOVEN-18-35"></div>
+          <div class="field"><label>Nombre a mostrar</label><input class="input" id="adm-aud-nombre" placeholder="Ej: Jóvenes 18-35"></div>
+          <div class="field"><label>Tamaño <span style="font-weight:400;color:var(--color-neutral-500)">(opcional)</span></label>
+            <select class="input" id="adm-aud-tamano">
+              <option value="">— sin definir —</option>
+              <option value="chica">Chica</option>
+              <option value="mediana">Mediana</option>
+              <option value="grande">Grande</option>
+            </select>
+          </div>
+          <div class="field"><label>Saved Audience ID</label><input class="input" id="adm-aud-saved-id" placeholder="Ej: 120211234567890123 — el público guardado real en Meta Ads Manager"></div>
+        </div>
+        <p id="adm-aud-error" class="error" style="margin:12px 0 0" hidden></p>
+        <p id="adm-aud-exito" style="margin:12px 0 0;font-size:13px;color:var(--color-accent-2-600)" hidden></p>
+        <button class="btn btn-primary" data-action="adm-crear-audiencia" style="margin-top:14px">Crear audiencia</button>
+        <div id="adm-audiencias-lista" style="margin-top:18px"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="batch-bar" class="batch-bar" hidden>
+    <span id="batch-status" style="font-size:13px;color:var(--color-neutral-300)"></span>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-secondary" id="batch-desestimar-abrir">Desestimar</button>
+      <button class="btn btn-primary" id="batch-confirm">Confirmar</button>
+    </div>
+  </div>
+
+  <div id="batch-desestimar-bar" class="batch-bar" hidden style="flex-direction:column;align-items:stretch;gap:8px">
+    <div style="font-size:13px;color:var(--color-neutral-300)">Desestimar <strong id="batch-desestimar-count"></strong> — no se crea nada en Meta, el motivo se aplica a todas.</div>
+    <textarea class="input" id="batch-desestimar-motivo" rows="2" placeholder="Motivo — se aplica a todas las piezas seleccionadas"></textarea>
+    <p id="batch-desestimar-error" class="error" style="margin:0" hidden></p>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-secondary" id="batch-desestimar-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="batch-desestimar-confirmar">Desestimar</button>
+    </div>
+  </div>
+  </div><!-- /#app-shell -->
+
+  <div id="lightbox-overlay" hidden data-action="cerrar-lightbox" style="position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:30px">
+    <img id="lightbox-img" src="" style="max-width:min(92vw,900px);max-height:78vh;object-fit:contain;border-radius:var(--radius-md)">
+    <div style="display:flex;gap:10px" data-action="stop-prop">
+      <a id="lightbox-descargar" class="btn btn-secondary" download target="_blank" rel="noopener"><i class="ph ph-download-simple"></i> Descargar</a>
+      <a id="lightbox-abrir" class="btn btn-secondary" target="_blank" rel="noopener"><i class="ph ph-arrow-square-out"></i> Abrir en pestaña nueva</a>
+      <button type="button" class="btn btn-primary" data-action="cerrar-lightbox">Cerrar</button>
+    </div>
+  </div>
+
+  <div id="editar-modal-overlay" hidden data-action="editarpauta-cancelar" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:200;display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 20px">
+    <div id="editar-modal-panel" style="background:var(--color-surface);border-radius:var(--radius-md);max-width:820px;width:100%;padding:26px 30px;margin-bottom:40px" data-action="stop-prop"></div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
