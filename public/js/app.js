@@ -3745,9 +3745,23 @@ async function iniciarApp() {
   }
   if (loginErrorUrl) state.loginError = loginErrorUrl;
 
-  const [rUsuarios, rConfig] = await Promise.all([apiFetch('/api/usuarios'), apiFetch('/api/auth/config')]);
-  state.usuarios = await rUsuarios.json();
-  state.googleHabilitado = rConfig.ok ? (await rConfig.json()).googleHabilitado : false;
+  // Si esto falla (ej. el server no puede leer usuarios), NO puede dejar la
+  // pantalla en blanco sin dibujar nada — mejor mostrar el error en el
+  // Login que un blanco que solo se arregla si el usuario toca algo que
+  // dispare un render() de casualidad (bug real que pasó en producción).
+  try {
+    const [rUsuarios, rConfig] = await Promise.all([apiFetch('/api/usuarios'), apiFetch('/api/auth/config')]);
+    const dataUsuarios = await rUsuarios.json();
+    if (!rUsuarios.ok) throw new Error(dataUsuarios.detalle || dataUsuarios.error || 'No se pudo cargar la lista de usuarios.');
+    state.usuarios = Array.isArray(dataUsuarios) ? dataUsuarios : [];
+    state.googleHabilitado = rConfig.ok ? (await rConfig.json()).googleHabilitado : false;
+  } catch (err) {
+    state.usuarios = [];
+    state.googleHabilitado = false;
+    state.loginError = err.message;
+    render();
+    return;
+  }
 
   const idElegido = uidGoogle || state.usuarioActualId;
   const usuarioValido = state.usuarios.find((u) => u.id === idElegido);
