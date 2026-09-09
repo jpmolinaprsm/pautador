@@ -2000,13 +2000,30 @@ function claveCelda(objetivo, audCodigo) { return objetivo + "||" + audCodigo; }
 
 // Misma regla que el servidor (services/colaPautas.js): parejo con dos
 // decimales y el resto a la última, para que dé 100 exacto y no 99,99.
+function repartoGrupoParejo(mapa, combos, pctTotal) {
+  const n = combos.length;
+  if (!n) return;
+  const pctBase = Math.floor((pctTotal / n) * 100) / 100;
+  combos.forEach((c) => { mapa[claveCelda(c.objetivo, c.audCodigo)] = pctBase; });
+  const ultima = combos[n - 1];
+  mapa[claveCelda(ultima.objetivo, ultima.audCodigo)] = +(pctTotal - pctBase * (n - 1)).toFixed(2);
+}
+
+// Con 2+ audiencias, la Principal arranca con el 70% del presupuesto
+// (repartido parejo entre sus objetivos habilitados) y el 30% restante se
+// reparte parejo entre los refuerzos — misma regla que el servidor
+// (services/colaPautas.js). Con una sola audiencia, parejo entre todo.
 function repartoParejo(combos) {
   const mapa = {};
   if (!combos.length) return mapa;
-  const pctBase = Math.floor((100 / combos.length) * 100) / 100;
-  combos.forEach((c) => { mapa[claveCelda(c.objetivo, c.audCodigo)] = pctBase; });
-  const ultima = combos[combos.length - 1];
-  mapa[claveCelda(ultima.objetivo, ultima.audCodigo)] = +(100 - pctBase * (combos.length - 1)).toFixed(2);
+  const principales = combos.filter((c) => c.principal);
+  const refuerzos = combos.filter((c) => !c.principal);
+  if (principales.length && refuerzos.length) {
+    repartoGrupoParejo(mapa, principales, 70);
+    repartoGrupoParejo(mapa, refuerzos, 30);
+  } else {
+    repartoGrupoParejo(mapa, combos, 100);
+  }
   return mapa;
 }
 
@@ -3004,7 +3021,7 @@ function combosDePiezaV2(i) {
     return a ? a.nombre : codigo;
   };
   const combos = [];
-  objetivos.forEach((objetivo) => { codigos.forEach((codigo) => { combos.push({ objetivo, audCodigo: codigo, audNombre: nombre(codigo), manual: codigo === 'Otra' }); }); });
+  objetivos.forEach((objetivo) => { codigos.forEach((codigo) => { combos.push({ objetivo, audCodigo: codigo, audNombre: nombre(codigo), manual: codigo === 'Otra', principal: codigo === principal }); }); });
   return combos;
 }
 

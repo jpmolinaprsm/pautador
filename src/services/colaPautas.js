@@ -72,6 +72,20 @@ function resolverAudiencia(codigo, textoLibre, audienciasActivo, tipo) {
   };
 }
 
+// Reparto parejo con dos decimales que suma EXACTO el total pedido: con 3
+// celdas, 100/3 redondeado da 33,33 × 3 = 99,99 y se perdían pesos del
+// presupuesto (y el total nunca cerraba). El resto del redondeo se le suma
+// a la última celda del grupo, igual que hace "Repartir parejo" en la
+// pantalla.
+function repartirParejo(combos, pctTotal) {
+  const n = combos.length;
+  if (!n) return [];
+  const pctBase = Math.floor((pctTotal / n) * 100) / 100;
+  const celdas = combos.map(({ objetivo, audiencia }) => ({ objetivo, audiencia, porcentaje: pctBase, manual: audiencia.manual }));
+  celdas[n - 1].porcentaje = +(pctTotal - pctBase * (n - 1)).toFixed(2);
+  return celdas;
+}
+
 // Arma la matriz objetivo × audiencia de una pauta, con un reparto inicial
 // parejo (el pautador lo ajusta después en la UI). Si hay un solo objetivo y
 // una sola audiencia, no arma matriz — devuelve un solo bloque al 100%.
@@ -127,18 +141,17 @@ async function getMatrizParaPauta(pauta) {
     };
   }
 
-  const totalCeldas = combosCrudos.length;
-  // Reparto parejo que suma EXACTO 100: con 3 celdas, 100/3 redondeado da
-  // 33,33 × 3 = 99,99 y se perdían pesos del presupuesto (y el total nunca
-  // cerraba). El resto del redondeo se le suma a la última celda, igual que
-  // hace "Repartir parejo" en la pantalla.
-  const pctBase = totalCeldas ? Math.floor((100 / totalCeldas) * 100) / 100 : 0;
-
-  const celdas = combosCrudos.map(({ objetivo, audiencia }) => ({ objetivo, audiencia, porcentaje: pctBase, manual: audiencia.manual }));
-  if (celdas.length) {
-    const ultima = celdas[celdas.length - 1];
-    ultima.porcentaje = +(100 - pctBase * (celdas.length - 1)).toFixed(2);
-  }
+  const principalCombos = combosCrudos.filter((c) => c.audiencia.tipo === 'principal');
+  const refuerzoCombos = combosCrudos.filter((c) => c.audiencia.tipo !== 'principal');
+  // Con 2 o más audiencias, la Principal arranca con el 70% del presupuesto
+  // (repartido parejo entre sus objetivos habilitados) y el 30% restante se
+  // reparte parejo entre los refuerzos — para que no arranque en pie de
+  // igualdad con ellos. Con una sola audiencia (o si algún grupo quedó
+  // vacío por combos_excluidos), se reparte parejo entre todas las celdas,
+  // como antes.
+  const celdas = principalCombos.length && refuerzoCombos.length
+    ? repartirParejo(principalCombos, 70).concat(repartirParejo(refuerzoCombos, 30))
+    : repartirParejo(combosCrudos, 100);
   celdas.forEach((c) => {
     c.monto = +((presupuestoTotal * c.porcentaje) / 100).toFixed(2);
   });
