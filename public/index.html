@@ -39,7 +39,7 @@
       <p style="margin:0 0 20px;font-size:13px;color:var(--color-neutral-500)">Vas a ver y pautar solo lo de este proyecto — se puede cambiar después con "Cambiar de Proyecto".</p>
       <div id="pantalla-proyecto-lista" class="pantalla-onboarding-lista"></div>
       <div style="margin-top:22px;padding-top:16px;border-top:1px dashed var(--color-divider)">
-        <label style="display:block;font-size:11px;color:var(--color-neutral-400);margin-bottom:6px">Versión de prueba — cambiar de usuario</label>
+        <label style="display:block;font-size:11px;color:var(--color-neutral-400);margin-bottom:6px">Mientras se terminan de asignar los accesos, entrá como</label>
         <select class="input" id="pantalla-proyecto-usuario-select" style="width:100%"></select>
       </div>
     </div>
@@ -96,7 +96,7 @@
           <div id="pd2-activo-nota" style="font-size:11px;color:var(--color-neutral-400);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw"></div>
         </div>
         <div class="tabs" id="pd2-modo-carga-wrap" style="padding:0;border:none" hidden>
-          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="anuncios">Pedido de Anuncios</button>
+          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="anuncios" id="pd2-modo-carga-anuncios-label">Pedido de Anuncios</button>
           <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="csv">Cargar CSV</button>
         </div>
       </div>
@@ -115,7 +115,7 @@
       <div id="pd2-modo-elegir" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
         <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="anuncios" style="padding:22px 20px;text-align:left">
           <i class="ph ph-file-text" style="font-size:26px;color:var(--color-accent)"></i>
-          <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px">Pedido de Anuncios</div>
+          <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px" id="pd2-card-anuncios-titulo">Pedido de Anuncios</div>
           <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Una pieza o varias juntas — se elige la cantidad en el Módulo 4.</div>
         </button>
         <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" style="padding:22px 20px;text-align:left">
@@ -196,6 +196,7 @@
               </div>
             </div>
           </div>
+          <div id="pd2-cruces-wrap" hidden></div>
           <p id="pd2-modulo-2-error" class="error" style="margin:10px 0 0" hidden></p>
           <div style="display:flex;justify-content:flex-end;margin-top:12px">
             <button class="btn btn-primary" data-action="pd2-confirmar-modulo" data-id="2">Confirmar y seguir</button>
@@ -291,8 +292,18 @@
           <div id="pd2-bulk-resultado" style="margin-top:10px;font-size:13px"></div>
           <div style="display:flex;gap:8px;align-items:center;margin-top:14px">
             <button class="btn btn-primary" id="pd2-bulk-crear" data-action="pd2-bulk-crear">Ver preview</button>
+            <button type="button" class="btn btn-secondary" id="pd2-editar-bloqueo" data-action="pd2-editar-bloqueo" hidden><i class="ph ph-pencil-simple"></i> Editar</button>
           </div>
         </div>
+      </div>
+
+      <!-- Siempre visible, sin importar en qué módulo se esté — no es un
+           campo del pedido en sí, es una nota libre para quien lo valida
+           (pedido del usuario: "que el implementador los vea a la hora de
+           validar", ver renderExpandContent en app.js). -->
+      <div class="field" id="pd2-comentarios-wrap" style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:12px">
+        <label>Comentarios <span style="font-weight:400;color:var(--color-neutral-500)">(opcional — los ve quien valide este pedido)</span></label>
+        <textarea class="input" id="pd2-comentarios" rows="2" placeholder="Cualquier aclaración para quien confirme el pedido"></textarea>
       </div>
       </div>
     </div>
@@ -301,7 +312,7 @@
   <div id="tab-pendientes" style="padding:20px 28px 0" hidden>
     <div class="lista-scroll">
       <div class="grid-header">
-        <div></div><div>Código</div><div>Proyecto</div><div>Activo</div><div>Eje</div><div>Campaña</div><div>Contenido</div><div>Tipo</div><div>Objetivo(s)</div><div>Audiencia</div><div>Presupuesto</div><div></div>
+        <div></div><div>Activo</div><div>Eje</div><div>Campaña y Contenido</div><div>Anuncios</div><div>Objetivo(s)</div><div>Audiencia</div><div>Presupuesto</div><div>Inicio</div><div>Fin</div><div>Pendiente</div><div></div>
       </div>
       <div id="lista-pendientes"></div>
     </div>

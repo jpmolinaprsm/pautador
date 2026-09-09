@@ -78,7 +78,9 @@ create table if not exists cola_pautas (
   desestimado_en          timestamptz,
   motivo_desestimacion    text,
   redes                   text,
-  material_stories        text  -- material específico para Stories cuando va junto con Feed/Reels con imágenes distintas (agregada en migration_003)
+  material_stories        text, -- material específico para Stories cuando va junto con Feed/Reels con imágenes distintas (agregada en migration_003)
+  comentarios             text, -- cuadro libre debajo de los módulos de "Pedido de Anuncios", lo ve el implementador al validar
+  combos_excluidos        text  -- cruces Objetivo|Audiencia que el PM desactivó al pedir ("Interacción|AR-GENERAL,Alcance Normal|Otra") — nunca se generan, ver colaPautas.js getMatrizParaPauta
 );
 
 -- ============================================================

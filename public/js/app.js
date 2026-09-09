@@ -9,6 +9,30 @@ function fmtMoney(n) {
   return '$' + Math.round(n || 0).toLocaleString('es-AR');
 }
 
+// "Pendiente" de la tabla de Validación: hace cuánto se pidió (columna
+// nueva, pedido del usuario) — a partir de la fecha del pedido, no de
+// fecha_inicio (esa es cuándo arranca a correr, no cuándo se pidió). Si es
+// de hoy, en minutos/horas (el correlation_id trae el timestamp exacto,
+// "PEDIDO-<Date.now()>" — ver crearPedido en pedidos.js); si no, en días.
+function haceCuanto(fechaStr, id) {
+  const ts = id && /^PEDIDO-(\d+)$/.test(id) ? Number(id.slice(7)) : null;
+  if (ts) {
+    const creado = new Date(ts);
+    const ahora = new Date();
+    if (creado.toDateString() === ahora.toDateString()) {
+      const diffMin = Math.max(0, Math.round((ahora - creado) / 60000));
+      if (diffMin < 1) return 'Recién';
+      if (diffMin < 60) return `Hace ${diffMin} min`;
+      return `Hace ${Math.floor(diffMin / 60)} h`;
+    }
+  }
+  if (!fechaStr) return '—';
+  const dias = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(fechaStr + 'T00:00:00').getTime()) / 86400000);
+  if (dias <= 0) return 'Hoy';
+  if (dias === 1) return 'Ayer';
+  return `Hace ${dias} días`;
+}
+
 // Orden fijo pedido por el usuario para el desplegable de Objetivo — no es
 // el orden de equiv_objetivo en la base. Lo que no esté en esta lista (ej.
 // un objetivo nuevo que se cargue después) queda al final, sin romper nada.
@@ -112,6 +136,10 @@ const state = {
   pd2Proyecto: null, pd2ActivoKey: null, pd2TipoCodigo: 'D', pd2EjeCodigo: null,
   pd2CampanasSugeridas: [],
   pd2Objetivo: [], pd2AudienciaCodigo: '', pd2Refuerzo: [],
+  // Cruces Objetivo|Audiencia que el PM desactivó antes de pedir — ver
+  // renderCrucesV2. Vive fuera de pd2BulkItems porque Objetivo/Audiencia
+  // son compartidos por todas las piezas del pedido, no por pieza.
+  pd2CombosExcluidos: {},
   pd2Visibilidad: 'DARK', pd2Redes: ['facebook', 'instagram'], pd2Placements: [],
   pd2Posts: [], pd2CargandoPosts: false,
   // Piezas del pedido — SIEMPRE al menos 1 (ver ajustarCantidadPiezasV2),
@@ -221,8 +249,11 @@ async function cargarItems() {
 
 // ---------- Mutaciones locales (edición de % antes de confirmar) ----------
 
+// Una celda "excluida" (ver toggleComboExcluido) no se manda a confirmar y
+// no cuenta para el 100% del reparto — como si ese cruce Objetivo×Audiencia
+// no existiera para esta pieza.
 function totalPct(item) {
-  return item.celdas.reduce((a, c) => a + c.pct, 0);
+  return item.celdas.reduce((a, c) => a + (c.excluido ? 0 : c.pct), 0);
 }
 
 function findItem(id) {
@@ -245,23 +276,24 @@ function setPct(id, objetivo, audCodigo, val) {
   const it = findItem(id);
   if (!it) return;
   const target = it.celdas.find((c) => c.objetivo === objetivo && c.audCodigo === audCodigo && !c.manual);
-  if (!target) return;
+  if (!target || target.excluido || target.bloqueado) return;
   const manualSum = it.celdas.filter((c) => c.manual).reduce((a, c) => a + c.pct, 0);
-  const budget = 100 - manualSum;
-  const others = it.celdas.filter((c) => !c.manual && !(c.objetivo === objetivo && c.audCodigo === audCodigo));
+  const bloqueadoSum = it.celdas.filter((c) => !c.manual && !c.excluido && c.bloqueado).reduce((a, c) => a + c.pct, 0);
+  const budget = 100 - manualSum - bloqueadoSum;
+  const others = it.celdas.filter((c) => !c.manual && !c.excluido && !c.bloqueado && !(c.objetivo === objetivo && c.audCodigo === audCodigo));
   const othersOldSum = others.reduce((a, c) => a + c.pct, 0);
   const newPct = Math.max(0, Math.min(budget, isNaN(val) ? 0 : val));
   const othersNewSum = budget - newPct;
   it.celdas = it.celdas.map((c) => {
     if (c.objetivo === objetivo && c.audCodigo === audCodigo) return { ...c, pct: newPct };
-    if (c.manual) return c;
+    if (c.manual || c.excluido || c.bloqueado) return c;
     const share = othersOldSum > 0 ? c.pct / othersOldSum : 1 / (others.length || 1);
     return { ...c, pct: Math.round(othersNewSum * share) };
   });
   // corrige el drift de redondeo para que la suma editable dé exacta
-  const drift = budget - it.celdas.filter((c) => !c.manual).reduce((a, c) => a + c.pct, 0);
+  const drift = budget - it.celdas.filter((c) => !c.manual && !c.excluido && !c.bloqueado).reduce((a, c) => a + c.pct, 0);
   if (drift !== 0) {
-    const fixIdx = it.celdas.findIndex((c) => !c.manual && !(c.objetivo === objetivo && c.audCodigo === audCodigo));
+    const fixIdx = it.celdas.findIndex((c) => !c.manual && !c.excluido && !c.bloqueado && !(c.objetivo === objetivo && c.audCodigo === audCodigo));
     if (fixIdx !== -1) it.celdas[fixIdx] = { ...it.celdas[fixIdx], pct: it.celdas[fixIdx].pct + drift };
   }
   render();
@@ -271,12 +303,13 @@ function distributeEven(id) {
   const it = findItem(id);
   if (!it) return;
   const manualSum = it.celdas.filter((c) => c.manual).reduce((a, c) => a + c.pct, 0);
-  const editable = it.celdas.filter((c) => !c.manual);
-  const remaining = 100 - manualSum;
+  const bloqueadoSum = it.celdas.filter((c) => !c.manual && !c.excluido && c.bloqueado).reduce((a, c) => a + c.pct, 0);
+  const editable = it.celdas.filter((c) => !c.manual && !c.excluido && !c.bloqueado);
+  const remaining = 100 - manualSum - bloqueadoSum;
   const base = Math.floor(remaining / (editable.length || 1));
   let given = 0, seen = 0;
   it.celdas = it.celdas.map((c) => {
-    if (c.manual) return c;
+    if (c.manual || c.excluido || c.bloqueado) return c;
     seen++;
     const val = seen === editable.length ? remaining - given : base;
     given += val;
@@ -289,10 +322,41 @@ function allToCell(id, objetivo, audCodigo) {
   const it = findItem(id);
   if (!it) return;
   const manualSum = it.celdas.filter((c) => c.manual).reduce((a, c) => a + c.pct, 0);
+  const bloqueadoSum = it.celdas.filter((c) => !c.manual && !c.excluido && c.bloqueado && !(c.objetivo === objetivo && c.audCodigo === audCodigo)).reduce((a, c) => a + c.pct, 0);
   it.celdas = it.celdas.map((c) => {
-    if (c.manual) return c;
-    if (c.objetivo === objetivo && c.audCodigo === audCodigo) return { ...c, pct: 100 - manualSum };
+    if (c.manual || c.excluido || (c.bloqueado && !(c.objetivo === objetivo && c.audCodigo === audCodigo))) return c;
+    if (c.objetivo === objetivo && c.audCodigo === audCodigo) return { ...c, pct: 100 - manualSum - bloqueadoSum, bloqueado: false };
     return { ...c, pct: 0 };
+  });
+  render();
+}
+
+// Deja de contar este cruce Objetivo×Audiencia para la pieza (no se crea el
+// conjunto de anuncios en Meta) — pedido del usuario: "que vuelva a estar
+// que se puedan desactivar líneas de cruce". Al pasar a false, el usuario
+// tiene que repartir de nuevo (o tocar "Repartir parejo") para llegar a 100%.
+function toggleComboExcluido(id, objetivo, audCodigo) {
+  const it = findItem(id);
+  if (!it) return;
+  it.celdas = it.celdas.map((c) => {
+    if (c.manual || c.objetivo !== objetivo || c.audCodigo !== audCodigo) return c;
+    const excluido = !c.excluido;
+    // Excluir y bloquear son mutuamente excluyentes — no tendría sentido
+    // "no se crea" y "bloqueado en X%" a la vez.
+    return { ...c, excluido, bloqueado: excluido ? false : c.bloqueado, pct: excluido ? 0 : c.pct };
+  });
+  render();
+}
+
+// Fija el % de esta celda: "Repartir parejo"/mover otro slider ya no la
+// tocan, solo redistribuyen entre las que quedan sin bloquear — pedido del
+// usuario: "botón para bloquear un presupuesto y modificar los otros".
+function toggleComboBloqueado(id, objetivo, audCodigo) {
+  const it = findItem(id);
+  if (!it) return;
+  it.celdas = it.celdas.map((c) => {
+    if (c.manual || c.objetivo !== objetivo || c.audCodigo !== audCodigo) return c;
+    return { ...c, bloqueado: !c.bloqueado, excluido: false };
   });
   render();
 }
@@ -311,7 +375,7 @@ async function confirmOne(id) {
   // ID de publicación (vacío = usa la principal de la pieza, mismo
   // resultado que si no se hubiera destildado nada — ver confirmar.js).
   const usaPostPorCelda = it.visibilidad === 'PUBLICO' && state.mismaPublicacion[id] === false;
-  const celdas = it.celdas.map((c) => ({
+  const celdas = it.celdas.filter((c) => !c.excluido).map((c) => ({
     objetivo: c.objetivo, audiencia_codigo: c.audCodigo, porcentaje: c.pct,
     ...(usaPostPorCelda ? { postId: state.celdaPostIds[`${id}|${c.objetivo}|${c.audCodigo}`] || undefined } : {}),
   }));
@@ -714,10 +778,16 @@ function buildVM(item) {
   const celdasAuto = item.celdas.filter((c) => !c.manual);
   const hayManual = isManualOnly || item.celdas.some((c) => c.manual);
 
+  // Columna "Anuncios": cuántos conjuntos de anuncios (celdas automáticas)
+  // tiene ESTA pieza, más "Bulk (N)" si vino junto con otras piezas en la
+  // misma tanda (Módulo 5, "Cantidad de piezas" > 1 — ver enviarBulkV2).
   const tags = [];
-  if (celdasAuto.length > 1) tags.push({ label: 'Múltiples Objetivos', clase: 'tag tag-accent' });
-  else if (celdasAuto.length === 1) tags.push({ label: 'Simple', clase: 'tag tag-neutral' });
+  if (celdasAuto.length) tags.push({ label: `${celdasAuto.length} conjunto${celdasAuto.length > 1 ? 's' : ''}`, clase: 'tag tag-accent' });
   if (hayManual) tags.push({ label: 'Hacer Manual', clase: 'tag tag-outline' });
+  if (item.bulk_id) {
+    const grupo = state.items.filter((it) => it.bulk_id === item.bulk_id).length;
+    if (grupo > 1) tags.push({ label: `Bulk (${grupo})`, clase: 'tag tag-outline' });
+  }
 
   const audienciaLabel = item.audiencias.length > 1
     ? item.audiencias[0].nombre + ' +' + (item.audiencias.length - 1) + ' más'
@@ -729,16 +799,29 @@ function buildVM(item) {
   const combos = [];
   item.objetivos.forEach((objetivo) => {
     item.audiencias.forEach((aud) => {
-      const c = item.celdas.find((x) => x.objetivo === objetivo && x.audCodigo === aud.codigo) || { pct: 0, manual: aud.manual };
+      const c = item.celdas.find((x) => x.objetivo === objetivo && x.audCodigo === aud.codigo);
+      // objetivos/audiencias son los SETS distintos que aparecen en
+      // item.celdas — antes de que existiera combos_excluidos, el cruce
+      // completo siempre estaba, así que esto nunca fallaba. Ahora un
+      // cruce puede faltar a propósito (el PM lo desactivó al pedir, ver
+      // getMatrizParaPauta) — si no está, no se "recrea" con pct 0, se
+      // salta directo: no tiene que aparecer acá ni bajo el mínimo.
+      if (!c) return;
       const monto = Math.round(item.presupuesto * c.pct / 100);
       combos.push({
         objetivo, audCodigo: aud.codigo, audNombre: aud.nombre, manual: aud.manual, editable: !aud.manual,
         pct: c.pct, monto, montoLabel: fmtMoney(monto),
         // Estado del carril de ESTA celda: sin valor = todavía no se confirmó.
         estadoCelda: c.estadoCelda || '',
+        // Cruce desactivado (ver toggleComboExcluido) — no se manda a
+        // confirmar, no cuenta para el mínimo ni para el 100% del reparto.
+        excluido: !!c.excluido,
+        // Bloqueada: el % queda fijo, "Repartir parejo"/otros sliders no la
+        // tocan (ver toggleComboBloqueado).
+        bloqueado: !!c.bloqueado,
         // Cada celda automática es un conjunto de anuncios propio y Meta le
         // exige el mínimo a CADA UNO por separado (no al total de la pieza).
-        bajoMinimo: !aud.manual && !!item.min_por_conjunto && monto < item.min_por_conjunto,
+        bajoMinimo: !aud.manual && !c.excluido && !!item.min_por_conjunto && monto < item.min_por_conjunto,
       });
     });
   });
@@ -756,6 +839,9 @@ function buildVM(item) {
   return {
     id: item.correlation_id, codigo: item.codigo, activoNombre: item.activo_nombre, activo: item.activo, proyecto: item.proyecto,
     isDark: item.visibilidad === 'DARK', fecha: item.fecha, campana: item.campana, contenido: item.contenido, eje: item.eje, formato: item.formato,
+    // Columnas "Inicio"/"Fin"/"Pendiente" de la tabla de Validación.
+    fechaInicio: item.fecha_inicio || '', fechaFin: item.fecha_fin || '',
+    pendienteLabel: haceCuanto(item.fecha, item.correlation_id),
     visibilidadLabel: item.visibilidad === 'DARK' ? 'Oculto (Dark)' : 'Público',
     imagenPreview: item.imagen_preview || '',
     // "Público" = siempre publicación existente — material guarda el
@@ -763,8 +849,17 @@ function buildVM(item) {
     publicacionLink: item.visibilidad === 'PUBLICO' ? (item.material || '') : '',
     // Para el mock de plataforma en el panel de abajo (ver renderMockPost).
     plataformas: parseListaClient(item.redes).map((r) => (r === 'instagram' ? 'Instagram' : 'Facebook')),
-    copy: item.copy, linkDestino: item.link_destino,
+    copy: item.copy, linkDestino: item.link_destino, comentarios: item.comentarios || '',
     objetivosLabel: item.objetivos.join(' + '), audienciaLabel, presupuesto: item.presupuesto, presupuestoLabel: fmtMoney(item.presupuesto),
+    // Por qué el presupuesto es el que es (Tipo/Intensidad × Tamaño de la
+    // audiencia principal, ver resolverPresupuestoPorTipo) — se muestra en
+    // Validación al lado del reparto.
+    tipoIntensidad: item.tipo_intensidad || '',
+    // Con más de una audiencia (principal + secundarias), se listan todas
+    // con su propio tamaño — el presupuesto solo usa el de la principal
+    // (ver resolverPresupuestoPorTipo), pero para explicar conviene ver
+    // las demás igual.
+    audienciasConTamano: item.audiencias.filter((a) => a.tamano).map((a) => ({ nombre: a.nombre, tamano: a.tamano })),
     tags, estadoLabel: isConfirmed ? 'Confirmada' : (isManualDone ? 'Hecha a mano' : (isDesestimada ? 'Desestimada' : (isDevueltaPm ? 'Devuelta para corrección' : (isPendienteManual ? 'Falta celda manual' : 'Pendiente')))),
     isExpanded, chevronClass: 'ph ' + (isExpanded ? 'ph-caret-down' : 'ph-caret-right'),
     selectable: item.estado === 'pendiente' && !isManualOnly && !isDesestimada && puedeEditarValidacion(),
@@ -811,16 +906,16 @@ function renderRowLine(vm, columnsCss, isHistorial) {
   return `
     <div class="row-line" style="grid-template-columns:${columnsCss}${isHistorial ? '' : ''}" data-action="toggle-expand" data-id="${vm.id}">
       ${checkboxCell}
-      <div style="font-family:var(--font-heading);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(vm.codigo)}</div>
-      <div class="row-ellip">${esc(vm.proyecto)}</div>
       <div class="row-ellip">${esc(vm.activoNombre)}${vm.isDark ? ' <span class="tag tag-neutral">DARK</span>' : ''}</div>
       <div class="row-ellip">${esc(vm.eje)}</div>
-      <div class="row-ellip">${esc(vm.campana)}</div>
       <div class="row-ellip">${esc(vm.contenido)}</div>
       <div>${estadoOrTipo}</div>
       <div class="row-ellip">${esc(vm.objetivosLabel)}</div>
       <div class="row-ellip">${esc(vm.audienciaLabel)}</div>
       <div style="font-size:13px">${esc(vm.presupuestoLabel)}</div>
+      <div class="row-ellip" style="font-size:13px">${esc(vm.fechaInicio)}</div>
+      <div class="row-ellip" style="font-size:13px">${esc(vm.fechaFin)}</div>
+      <div class="row-ellip" style="font-size:13px">${esc(vm.pendienteLabel)}</div>
       ${chevronCell}
     </div>`;
 }
@@ -887,15 +982,61 @@ function renderCombo(vm, combo) {
     <input class="input" style="font-size:12px;min-height:28px;padding:4px 8px;margin-top:6px" placeholder="ID de la publicación (vacío = la principal de la pieza)"
       data-action="celda-post-id" data-id="${vm.id}" data-objetivo="${esc(combo.objetivo)}" data-aud="${esc(combo.audCodigo)}" value="${esc(state.celdaPostIds[claveCelda] || '')}">` : '';
 
+  // Desactivar un cruce Objetivo×Audiencia: no se crea ese conjunto de
+  // anuncios ni cuenta para el 100% del reparto (ver toggleComboExcluido).
+  const incluirCheck = `
+    <label style="display:flex;align-items:center;gap:6px;flex:none" title="Desmarcá para no crear este conjunto de anuncios">
+      <input type="checkbox" ${combo.excluido ? '' : 'checked'} data-action="toggle-combo-excluido" data-id="${vm.id}" data-objetivo="${esc(combo.objetivo)}" data-aud="${esc(combo.audCodigo)}" style="width:16px;height:16px;accent-color:var(--color-accent)">
+    </label>`;
+  // Bloquear: fija el % de esta celda — "Repartir parejo" y los demás
+  // sliders reparten solo entre las que quedan sin bloquear (ver
+  // toggleComboBloqueado). No tiene sentido junto con excluir.
+  const bloquearBtn = combo.excluido ? '' : `
+    <button type="button" title="${combo.bloqueado ? 'Desbloquear — dejar que el reparto la toque' : 'Bloquear este % — repartir el resto entre las demás'}" style="cursor:pointer;border:1px solid ${combo.bloqueado ? 'var(--color-accent)' : 'var(--color-divider)'};background:transparent;color:${combo.bloqueado ? 'var(--color-accent)' : 'var(--color-neutral-400)'};padding:5px 7px;border-radius:4px;flex:none;display:flex;align-items:center" data-action="toggle-combo-bloqueado" data-id="${vm.id}" data-objetivo="${esc(combo.objetivo)}" data-aud="${esc(combo.audCodigo)}"><i class="ph ${combo.bloqueado ? 'ph-lock-simple' : 'ph-lock-simple-open'}"></i></button>`;
+
   return `
-    <div style="border:1px solid ${combo.bajoMinimo ? 'var(--color-warning, #d08a1e)' : 'var(--color-divider)'};border-radius:var(--radius-md);padding:10px 14px">
+    <div style="border:1px solid ${combo.bajoMinimo ? 'var(--color-warning, #d08a1e)' : 'var(--color-divider)'};border-radius:var(--radius-md);padding:10px 14px${combo.excluido ? ';opacity:.5' : ''}">
       <div style="display:flex;align-items:center;gap:14px">
+        ${incluirCheck}
         ${etiqueta}
-        <input type="range" min="0" max="100" value="${combo.pct}" style="flex:1;accent-color:var(--color-accent)" data-action="set-pct" data-id="${vm.id}" data-objetivo="${esc(combo.objetivo)}" data-aud="${esc(combo.audCodigo)}">
+        <input type="range" min="0" max="100" value="${combo.pct}" ${(combo.excluido || combo.bloqueado) ? 'disabled' : ''} style="flex:1;min-width:0;accent-color:var(--color-accent)" data-action="set-pct" data-id="${vm.id}" data-objetivo="${esc(combo.objetivo)}" data-aud="${esc(combo.audCodigo)}">
         ${montoBloque}
-        <button style="cursor:pointer;border:1px solid var(--color-accent-700);background:transparent;color:var(--color-accent-300);font-size:11px;padding:5px 8px;border-radius:4px;flex:none" data-action="all-to-cell" data-id="${vm.id}" data-objetivo="${esc(combo.objetivo)}" data-aud="${esc(combo.audCodigo)}">Todo acá</button>
+        ${bloquearBtn}
+        ${combo.excluido ? '' : `<button style="cursor:pointer;border:1px solid var(--color-accent-700);background:transparent;color:var(--color-accent-300);font-size:11px;padding:5px 8px;border-radius:4px;flex:none" data-action="all-to-cell" data-id="${vm.id}" data-objetivo="${esc(combo.objetivo)}" data-aud="${esc(combo.audCodigo)}">Todo acá</button>`}
       </div>
-      ${postInput}
+      ${combo.excluido ? '' : postInput}
+    </div>`;
+}
+
+// Columna "Presupuesto" del grid (Preview | Presupuesto | Matriz, ver
+// renderExpandContent): el monto, por qué es ese monto (Tipo/Intensidad ×
+// Tamaño de la audiencia principal — ver resolverPresupuestoPorTipo en
+// escalaPresupuestos.js) y el editor, todo junto en una sola tarjeta.
+function renderColumnaPresupuesto(vm, editorPresupuesto) {
+  const dato = (label, valor) => `
+    <div>
+      <div style="color:var(--color-neutral-500);text-transform:uppercase;font-size:10px;letter-spacing:.05em">${label}</div>
+      <div style="font-family:var(--font-heading);font-size:14px;margin-top:2px">${esc(valor)}</div>
+    </div>`;
+  // Con una sola audiencia, "Grande" alcanza. Con más de una (principal +
+  // secundarias), hay que decir de cuál es cada tamaño — no alcanza con
+  // tirar los valores sueltos.
+  const tamanos = vm.audienciasConTamano || [];
+  const bloqueTamano = !tamanos.length ? '' : tamanos.length === 1
+    ? dato('Tamaño Audiencia', tamanos[0].tamano)
+    : `
+    <div>
+      <div style="color:var(--color-neutral-500);text-transform:uppercase;font-size:10px;letter-spacing:.05em">Tamaño Audiencia</div>
+      <div style="margin-top:2px;display:flex;flex-direction:column;gap:2px">
+        ${tamanos.map((t) => `<div style="font-size:12px"><span style="font-family:var(--font-heading)">${esc(t.tamano)}</span> <span style="color:var(--color-neutral-500)">— ${esc(t.nombre)}</span></div>`).join('')}
+      </div>
+    </div>`;
+  return `
+    <div style="width:220px;flex:none;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+      ${dato('Presupuesto total', vm.presupuestoLabel)}
+      ${bloqueTamano}
+      ${vm.tipoIntensidad ? dato('Tipo de Campaña', vm.tipoIntensidad) : ''}
+      ${editorPresupuesto}
     </div>`;
 }
 
@@ -916,8 +1057,11 @@ function renderCarriles(vm, confirmando) {
     return `${Math.round(pct)}% (${fmtMoney(monto)})`;
   };
 
+  // Sin margin-bottom acá adentro: iba dentro de la fila que también tiene
+  // el botón "Repartir parejo" con align-items:center — ese margen asimétrico
+  // corría el centrado vertical y desalineaba el botón contra el título.
   const titulo = (texto, ayuda) => `
-    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">
+    <div style="display:flex;align-items:baseline;gap:8px">
       <span style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--color-neutral-400)">${texto}</span>
       <span style="font-size:11px;color:var(--color-neutral-500)">${ayuda}</span>
     </div>`;
@@ -937,7 +1081,7 @@ function renderCarriles(vm, confirmando) {
     const yaPublicado = auto.every((c) => c.estadoCelda === 'publicada');
     bloqueAuto = `
       <div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           ${titulo('Automático', `${auto.length} conjunto(s) — los publica PAUTADOR`)}
           ${yaPublicado ? '' : `<button class="btn btn-secondary" style="font-size:12px;padding:4px 10px" data-action="distribute-even" data-id="${vm.id}"><i class="ph ph-equals"></i>Repartir parejo</button>`}
         </div>
@@ -961,7 +1105,7 @@ function renderCarriles(vm, confirmando) {
     const pendientes = manual.filter((c) => c.estadoCelda !== 'manual_hecha' && c.estadoCelda !== 'manual').length;
     bloqueManual = `
       <div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-top:12px">
-        ${titulo('Manual', `${manual.length} conjunto(s) — los cargás vos en Meta${pendientes ? '' : ' · todo marcado'}`)}
+        <div style="margin-bottom:8px">${titulo('Manual', `${manual.length} conjunto(s) — los cargás vos en Meta${pendientes ? '' : ' · todo marcado'}`)}</div>
         <div style="display:flex;flex-direction:column;gap:8px">
           ${manual.map((c) => renderCombo(vm, c)).join('')}
         </div>
@@ -992,13 +1136,16 @@ function renderExpandContent(vm) {
   // preview de "Pedido de Anuncios", ver renderMockPost) — reemplaza la
   // miniatura chica + el cuadro de copy suelto que había antes acá.
   const plataformasVm = vm.plataformas && vm.plataformas.length ? vm.plataformas : ['Facebook'];
-  const mockPosts = plataformasVm.map((plataforma) => renderMockPost({
+  // Array, no un string ya unido — cada mock es su propia columna del grid
+  // de más abajo (pedido del usuario: "Preview FB | IG | Matriz" en vez de
+  // apilado, que ocupaba mucho alto con poco uso del ancho).
+  const mockPostsArr = plataformasVm.map((plataforma) => renderMockPost({
     nombrePagina: vm.activoNombre,
     copy: vm.copy,
     mediaUrl: vm.imagenPreview,
     lightboxUrl: vm.imagenPreview,
     plataforma,
-  })).join('<div style="height:10px"></div>');
+  }));
   const categorias = [
     vm.visibilidadLabel,
     vm.formato,
@@ -1010,41 +1157,54 @@ function renderExpandContent(vm) {
   // de confirmar. Mismos tramos fijos que "Crear Anuncios".
   const puedeEditarPresupuesto = puedeEditarValidacion() && !vm.isConfirmed && !vm.isManualDone && !vm.isDesestimada;
   const editorPresupuesto = puedeEditarPresupuesto ? `
-    <div style="display:flex;align-items:center;gap:6px;flex:none" data-action="stop-prop">
-      <select class="input" id="pto-edit-${esc(vm.id)}" style="width:130px">
+    <div style="display:flex;flex-direction:column;gap:6px" data-action="stop-prop">
+      <select class="input" id="pto-edit-${esc(vm.id)}" style="width:100%">
         ${PRESUPUESTO_TIERS.map((v) => `<option value="${v}" ${v === vm.presupuesto ? 'selected' : ''}>${labelPresupuesto(v)}</option>`).join('')}
       </select>
-      <button class="btn btn-secondary" data-action="guardar-presupuesto" data-id="${esc(vm.id)}">Guardar</button>
+      <button class="btn btn-secondary" data-action="guardar-presupuesto" data-id="${esc(vm.id)}" style="width:100%">Editar presupuesto total</button>
     </div>` : '';
-  // Mismo criterio que puedeEditarPresupuesto — reusado acá porque el
-  // trigger vive en el header, no al final del panel como antes.
-  const puedeDesestimar = puedeEditarPresupuesto;
+  // A diferencia del presupuesto (monto exacto, solo Implementador/Admin —
+  // el PM define Intensidad, no el número), desestimar un pedido propio sí
+  // lo puede hacer quien lo pidió: mismo criterio que editar los campos.
+  const puedeDesestimar = puedeEditarCampos() && !vm.isConfirmed && !vm.isManualDone && !vm.isDesestimada;
   const desestimarAbierto = state.desestimandoId === vm.id;
   const desestimarTrigger = (puedeDesestimar && !desestimarAbierto) ? `
-    <button class="btn btn-ghost" data-action="desestimar-abrir" data-id="${esc(vm.id)}" style="font-size:12px;color:var(--color-neutral-400)"><i class="ph ph-x-circle"></i> Desestimar</button>` : '';
+    <button class="btn btn-secondary" data-action="desestimar-abrir" data-id="${esc(vm.id)}" style="font-size:14px;padding:10px 18px;flex:none"><i class="ph ph-x-circle"></i> Desestimar Pedido</button>` : '';
   // Editar campos: parejo entre PM/Cuentas e Implementador (a diferencia de
   // Desestimar/Devolver, que siguen siendo solo del Implementador) — es la
   // única acción disponible en una pieza "devuelta_pm", y una más para
   // cualquier pendiente normal.
   const editarAbierto = state.editandoId === vm.id;
   const editarTrigger = (vm.puedeEditarPauta && !editarAbierto) ? `
-    <button class="btn btn-ghost" data-action="editarpauta-abrir" data-id="${esc(vm.id)}" style="font-size:12px;color:var(--color-neutral-400)"><i class="ph ph-pencil-simple"></i> Editar</button>` : '';
+    <button class="btn btn-primary" data-action="editarpauta-abrir" data-id="${esc(vm.id)}" style="font-size:14px;padding:10px 18px;flex:none"><i class="ph ph-pencil-simple"></i> Editar Pedido</button>` : '';
+  // Header en 3 niveles: 1) nombre de contenido, 2) características
+  // (Eje/Fecha/Duración + Oculto-Público/Formato/Objetivo/Audiencias),
+  // 3) Comentarios + Editar Pedido/Desestimar Pedido (apilados a la
+  // derecha — si el comentario es largo y el renglón crece, los botones
+  // siguen ocupando lo mismo en vez de estirarse horizontal).
   const header = `
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:16px">
-      <div>
-        <h4 style="margin:0 0 4px">${esc(vm.campana)}${vm.contenido ? ' - ' + esc(vm.contenido) : ''}</h4>
-        <div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px">Eje: ${esc(vm.eje)} · Fecha: ${esc(vm.fecha)} · ${esc(vm.duracionLabel)}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">${categorias}</div>
-      </div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:20px;margin-bottom:8px">
+      <h4 style="margin:0">${esc(vm.campana)}${vm.contenido ? ' - ' + esc(vm.contenido) : ''}</h4>
+      <div style="display:flex;align-items:center;gap:14px;flex:none">
+        <span class="tag tag-accent" style="font-family:monospace">${esc(vm.codigo)}</span>
         ${vm.publicacionLink ? `<a href="${esc(vm.publicacionLink)}" target="_blank" rel="noopener" style="font-size:13px;display:flex;gap:6px;align-items:center"><i class="ph ph-arrow-square-out"></i>Ver publicación</a>` : ''}
         ${vm.linkDestino ? `<a href="${esc(vm.linkDestino)}" target="_blank" rel="noopener" style="font-size:13px;display:flex;gap:6px;align-items:center"><i class="ph ph-link"></i>${esc(vm.linkDestino)}</a>` : ''}
-        ${editorPresupuesto}
+      </div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;color:var(--color-neutral-500);margin-bottom:14px">
+      <span>Eje: ${esc(vm.eje)} · Fecha: ${esc(vm.fecha)} · ${esc(vm.duracionLabel)}</span>
+      ${categorias}
+    </div>
+    <div style="display:flex;align-items:stretch;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+      ${vm.comentarios ? `
+      <div style="flex:1;min-width:260px;font-size:13px;color:var(--color-neutral-300);background:var(--color-bg);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:8px 12px">
+        <span style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--color-neutral-500)">Comentarios: </span>${esc(vm.comentarios)}
+      </div>` : '<div style="flex:1"></div>'}
+      <div style="display:flex;flex-direction:column;gap:8px;flex:none">
         ${editarTrigger}
         ${desestimarTrigger}
       </div>
     </div>
-    <div style="max-width:340px;margin-bottom:20px">${mockPosts}</div>
   `;
 
   const desestimarPanel = renderDesestimarPanel(vm, desestimarAbierto);
@@ -1056,28 +1216,26 @@ function renderExpandContent(vm) {
   // (PM o Implementador) — antes esto ni se evaluaba para PM, que caía
   // directo en la rama de solo-lectura de abajo y veía un resumen vacío
   // (esas piezas no tienen celdas).
+  // Desestimada/devuelta/solo-lectura ya no cortan con un return propio —
+  // solo fijan `body` y caen al armado del grid al final, así el layout
+  // (preview al lado del contenido) queda igual para todos los estados.
   if (vm.isDesestimada) {
     body = '<div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px">'
       + '<div style="font-family:var(--font-heading);margin-bottom:6px">Desestimada — no se pautó</div>'
       + '<div style="font-size:13px;color:var(--color-neutral-300)">' + esc(vm.motivoDesestimacion || '(sin motivo registrado)') + '</div>'
       + '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:8px">' + esc([vm.desestimadoPor, vm.desestimadoEn].filter(Boolean).join(' · ')) + '</div>'
       + '</div>';
-    return `<div class="expand-panel">${header}${desestimarPanel}${body}</div>`;
-  }
-  if (vm.isDevueltaPm) {
+  } else if (vm.isDevueltaPm) {
     body = '<div style="border:1px solid var(--color-accent-700);border-radius:var(--radius-md);padding:14px 16px">'
       + '<div style="font-family:var(--font-heading);margin-bottom:6px">Devuelta para corrección</div>'
       + '<div style="font-size:13px;color:var(--color-neutral-300)">' + esc(vm.motivoDesestimacion || '(sin motivo registrado)') + '</div>'
       + '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:8px">' + esc([vm.desestimadoPor, vm.desestimadoEn].filter(Boolean).join(' · ')) + '</div>'
       + (vm.puedeEditarPauta && !editarAbierto ? '<div style="margin-top:10px"><button class="btn btn-primary" data-action="editarpauta-abrir" data-id="' + esc(vm.id) + '">Corregir esta pieza</button></div>' : '')
       + '</div>';
-    return `<div class="expand-panel">${header}${desestimarPanel}${body}</div>`;
-  }
-
   // PM/Cuentas ve "Validación de Anuncios" en solo lectura — nada de chips,
   // sliders ni botones de confirmar/marcar manual, solo el estado propuesto
   // (pero SÍ puede editar los campos, ver editarTrigger/editarPanel arriba).
-  if (!puedeEditarValidacion() && !vm.isConfirmed && !vm.isManualDone) {
+  } else if (!puedeEditarValidacion() && !vm.isConfirmed && !vm.isManualDone) {
     const resumen = vm.isManualOnly
       ? `Audiencia "Otra" — ${esc(vm.audienciaOtraTexto)} (se carga a mano en Meta)`
       : vm.combos.map((c) => `<span style="font-family:var(--font-heading)">${esc(c.objetivo)}</span> · ${esc(c.audNombre)}: ${c.pct}% (${esc(c.montoLabel)})`).join('<br>');
@@ -1086,10 +1244,7 @@ function renderExpandContent(vm) {
         <div style="font-size:13px;color:var(--color-neutral-300)">${resumen}</div>
         <div style="font-size:11px;color:var(--color-neutral-500);margin-top:8px">Solo lectura — un Implementador la confirma en esta misma pantalla.</div>
       </div>`;
-    return `<div class="expand-panel">${header}${desestimarPanel}${body}</div>`;
-  }
-
-  if (vm.isManualDone) {
+  } else if (vm.isManualDone) {
     body = `<div style="font-size:13px;color:var(--color-neutral-400)">Marcada como hecha a mano — audiencia "Otra": ${esc(vm.audienciaOtraTexto)}.</div>`;
   } else if (vm.isConfirmed) {
     body = `
@@ -1128,7 +1283,16 @@ function renderExpandContent(vm) {
     body = renderCarriles(vm, confirmando);
   }
 
-  return `<div class="expand-panel">${header}${desestimarPanel}${body}</div>`;
+  // Grid "Preview FB | Preview IG | Matriz" — antes el/los mock(s) iban
+  // arriba del todo y el resto (carriles, resultado, etc.) apilado debajo,
+  // ocupando mucho alto con el ancho vacío al lado (pedido del usuario).
+  // Grid de 3 columnas: Preview(s) | Presupuesto (monto + por qué + editor,
+  // todo junto) | Matriz — pedido del usuario, antes el presupuesto estaba
+  // suelto arriba del todo y desconectado de por qué era ese monto.
+  const previewCols = mockPostsArr.map((p) => `<div style="width:260px;flex:none">${p}</div>`).join('');
+  const columnaPresupuesto = renderColumnaPresupuesto(vm, editorPresupuesto);
+  const grid = `<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">${previewCols}${columnaPresupuesto}<div style="flex:1;min-width:420px">${body}</div></div>`;
+  return `<div class="expand-panel">${header}${desestimarPanel}${grid}</div>`;
 }
 
 // El panel de motivo, siempre inmediatamente debajo del header — no hace
@@ -1138,20 +1302,21 @@ function renderDesestimarPanel(vm, abierto) {
   if (!abierto) return "";
   const enCurso = state.accionEnCurso[vm.id] === 'desestimar' || state.accionEnCurso[vm.id] === 'devolver';
   const err = state.desestimarError && state.desestimarError.id === vm.id ? state.desestimarError.msg : '';
-  // Tres caminos, no un solo botón de "Desestimar" — con un motivo cargado,
-  // la decisión es: ¿lo corrige el Implementador mismo y sigue ("Corregir y
-  // pautar")? ¿se lo devuelve a quien lo pidió para que lo corrija él
-  // ("Corregir y devolver")? ¿o directamente no va ("Desestimar por
-  // completo")? Antes esto era un rechazo terminal sin más opción.
+  // "Corregir y pautar"/"Corregir y devolver" son del Implementador (arregla
+  // él mismo o le pasa la corrección a quien pidió) — no tienen sentido para
+  // un PM desestimando su propio pedido. El PM solo ve Desestimar directo.
+  const opcionesImplementador = puedeEditarValidacion()
+    ? '<button class="btn btn-secondary" data-action="corregir-y-pautar" data-id="' + esc(vm.id) + '" ' + (enCurso ? 'disabled' : '') + '>Corregir y pautar</button>'
+      + '<button class="btn btn-secondary" data-action="devolver-confirmar" data-id="' + esc(vm.id) + '" ' + (enCurso ? 'disabled' : '') + '>' + (state.accionEnCurso[vm.id] === 'devolver' ? 'Devolviendo…' : 'Corregir y devolver') + '</button>'
+    : '';
   return '<div style="margin-bottom:16px;border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px" data-action="stop-prop">'
     + '<div style="font-family:var(--font-heading);margin-bottom:4px">¿Qué hacemos con este pedido?</div>'
-    + '<div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px">El motivo queda guardado en la pieza en los dos primeros casos — es lo que va a leer quien corresponda para corregir.</div>'
+    + '<div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px">El motivo queda guardado en la pieza — es lo que va a leer quien corresponda.</div>'
     + '<textarea class="input" id="motivo-' + esc(vm.id) + '" rows="2" placeholder="Ej: el link del material no abre / la campaña se cayó / duplicada con ' + esc(vm.codigo) + '"></textarea>'
     + (err ? '<div class="error" style="margin-top:6px">' + esc(err) + '</div>' : '')
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px">'
     +   '<button class="btn btn-secondary" data-action="desestimar-cancelar">Cancelar</button>'
-    +   '<button class="btn btn-secondary" data-action="corregir-y-pautar" data-id="' + esc(vm.id) + '" ' + (enCurso ? 'disabled' : '') + '>Corregir y pautar</button>'
-    +   '<button class="btn btn-secondary" data-action="devolver-confirmar" data-id="' + esc(vm.id) + '" ' + (enCurso ? 'disabled' : '') + '>' + (state.accionEnCurso[vm.id] === 'devolver' ? 'Devolviendo…' : 'Corregir y devolver') + '</button>'
+    +   opcionesImplementador
     +   '<button class="btn btn-primary" data-action="desestimar-confirmar" data-id="' + esc(vm.id) + '" ' + (enCurso ? 'disabled' : '') + '>' + (state.accionEnCurso[vm.id] === 'desestimar' ? 'Desestimando…' : 'Desestimar por completo') + '</button>'
     + '</div></div>';
 }
@@ -1259,8 +1424,14 @@ function renderToast() {
     </div>`;
 }
 
-const COLS_PENDIENTES = '32px 120px minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,1.2fr) 96px 110px minmax(0,1fr) 90px 24px';
-const COLS_HISTORIAL = '32px 120px minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.8fr) minmax(0,1fr) minmax(0,1.2fr) 96px 110px minmax(0,1fr) 90px';
+// Código y Proyecto salieron de la tabla (Código queda en el panel al
+// expandir — "sirve para decodificar más que nada"; Proyecto es redundante
+// una vez que ya filtraste por uno). Campaña se fusionó con Contenido (el
+// nombre de Contenido ya incluye la Campaña, ver pedidos.js) para no perder
+// ancho. Se suman Inicio/Fin/Pendiente sin agrandar la tabla — misma
+// cantidad de columnas que antes.
+const COLS_PENDIENTES = '32px minmax(0,1fr) minmax(0,0.7fr) minmax(0,1.6fr) 130px minmax(0,0.9fr) minmax(0,0.9fr) 100px 90px 90px 100px 24px';
+const COLS_HISTORIAL = '32px minmax(0,1fr) minmax(0,0.7fr) minmax(0,1.6fr) 130px minmax(0,0.9fr) minmax(0,0.9fr) 100px 90px 90px 100px';
 
 // Selector "actuando como" del nav + qué pestañas se ven según el rol.
 function renderNavUsuario() {
@@ -2272,8 +2443,60 @@ async function cargarPostsPedidoV2() {
   state.pd2CargandoPosts = false;
 }
 
+// Preview de los cruces Objetivo×Audiencia que va a generar el pedido —
+// pedido del usuario: "antes de mandar a pedir el anuncio el PM/Cuentas
+// puede desactivar un cruce". Se arma con lo que hay tildado AHORA en el
+// DOM (Objetivo del Módulo 1 no vive sincronizado en state, ver el
+// comentario de más arriba) — no con state.pd2Objetivo, que está desfasado.
+// Lo que se destilda acá queda en pd2CombosExcluidos y viaja con el pedido:
+// ese cruce nunca se crea, ni el implementador lo ve después en Validación
+// (ver getMatrizParaPauta en colaPautas.js).
+function renderCrucesV2() {
+  const wrap = document.getElementById('pd2-cruces-wrap');
+  if (!wrap) return;
+  const objetivos = leerCheckboxes('pd2-objetivo-chk');
+  const audienciaEl = document.getElementById('pd2-audiencia');
+  const principal = audienciaEl ? audienciaEl.value : '';
+  const refuerzo = leerCheckboxes('pd2-refuerzo-chk');
+  const codigos = [principal, ...refuerzo].filter(Boolean);
+  const audienciasUnicas = codigos.filter((c, i) => codigos.indexOf(c) === i);
+
+  if (objetivos.length * audienciasUnicas.length <= 1) {
+    wrap.hidden = true;
+    wrap.innerHTML = '';
+    return;
+  }
+  const nombreAud = (cod) => {
+    if (cod === 'Otra') return 'Otra';
+    const a = (state.pdAudiencias || []).find((x) => x.codigo === cod);
+    return a ? a.nombre : cod;
+  };
+  const celda = (obj, cod) => {
+    const clave = obj + '|' + cod;
+    const excluido = !!state.pd2CombosExcluidos[clave];
+    return '<td style="text-align:center;padding:6px 10px;border:1px solid var(--color-divider)' + (excluido ? ';opacity:.4' : '') + '">'
+      + '<input type="checkbox" ' + (excluido ? '' : 'checked') + ' data-action="pd2-toggle-cruce" data-clave="' + esc(clave) + '" style="width:14px;height:14px;accent-color:var(--color-accent)">'
+      + '</td>';
+  };
+  const cabecera = '<th style="padding:6px 10px;border:1px solid var(--color-divider)"></th>'
+    + audienciasUnicas.map((cod) => '<th style="padding:6px 10px;border:1px solid var(--color-divider);font-size:12px;font-weight:400;color:var(--color-neutral-400)">' + esc(nombreAud(cod)) + '</th>').join('');
+  const filas = objetivos.map((obj) => '<tr>'
+    + '<th style="padding:6px 10px;border:1px solid var(--color-divider);font-size:12px;font-weight:400;color:var(--color-neutral-400);text-align:left;white-space:nowrap">' + esc(obj) + '</th>'
+    + audienciasUnicas.map((cod) => celda(obj, cod)).join('')
+    + '</tr>').join('');
+  wrap.hidden = false;
+  wrap.innerHTML = '<div class="field" style="margin-top:12px">'
+    + '<label>Se van a crear estos cruces <span style="font-weight:400;color:var(--color-neutral-500)">(destildá para no crear alguno)</span></label>'
+    + '<div style="overflow-x:auto"><table style="border-collapse:collapse;font-family:var(--font-heading)">'
+    + '<thead><tr>' + cabecera + '</tr></thead><tbody>' + filas + '</tbody>'
+    + '</table></div>'
+    + '</div>';
+}
+
 function renderTabPedido2() {
   document.getElementById('pd2-titulo').textContent = state.pd2ModoDirecto ? 'Crear Anuncio' : 'Pedido de Anuncios';
+  document.getElementById('pd2-card-anuncios-titulo').textContent = state.pd2ModoDirecto ? 'Crear Anuncios' : 'Pedido de Anuncios';
+  document.getElementById('pd2-modo-carga-anuncios-label').textContent = state.pd2ModoDirecto ? 'Crear Anuncios' : 'Pedido de Anuncios';
 
   if (!state.pd2Proyecto) state.pd2Proyecto = state.pdProyecto || state.pdProyectos[0] || null;
   if (!state.pd2ActivoKey) {
@@ -2342,6 +2565,7 @@ function renderTabPedido2() {
   const refuerzoPrevio = leerCheckboxes('pd2-refuerzo-chk');
   document.getElementById('pd2-refuerzo-wrap').innerHTML = renderRefuerzoDropdown('pd2', state.pdAudiencias, refuerzoPrevio);
   document.getElementById('pd2-otras-refuerzo-wrap').hidden = !refuerzoPrevio.includes('Otra');
+  renderCrucesV2();
 
   document.getElementById('pd2-visibilidad').value = state.pd2Visibilidad;
   document.getElementById('pd2-formato-wrap').hidden = state.pd2Visibilidad !== 'DARK';
@@ -3270,6 +3494,7 @@ function resetPedidoAnunciosV2() {
   state.pd2Objetivo = [];
   state.pd2AudienciaCodigo = '';
   state.pd2Refuerzo = [];
+  state.pd2CombosExcluidos = {};
   state.pd2Visibilidad = 'DARK';
   state.pd2Redes = ['facebook', 'instagram'];
   state.pd2Placements = [];
@@ -3282,6 +3507,7 @@ function resetPedidoAnunciosV2() {
   document.getElementById('pd2-fecha-fin').value = '';
   document.getElementById('pd2-campana').value = '';
   document.getElementById('pd2-link-destino').value = '';
+  document.getElementById('pd2-comentarios').value = '';
 }
 
 function renderResultadoBulkV2() {
@@ -3305,10 +3531,27 @@ function renderResultadoBulkV2() {
   document.getElementById('pd2-bulk-resultado').innerHTML = renderPreviewsBulkV2() + filas + nota;
 
   const btn = document.getElementById('pd2-bulk-crear');
+  const listo = !!(state.pd2BulkPreviews && state.pd2BulkPreviews.length && state.pd2BulkPreviews.every((p) => p.ok));
   if (btn && !state.pd2BulkEnviando && !state.pd2BulkVerificando) {
-    const listo = state.pd2BulkPreviews && state.pd2BulkPreviews.every((p) => p.ok);
     btn.textContent = listo ? (state.pd2BulkItems.length > 1 ? 'Confirmar pedidos' : 'Confirmar pedido') : 'Ver preview';
   }
+  bloquearFormularioV2(listo);
+}
+
+// Con el preview ya generado y sin errores, se bloquea todo el formulario
+// (módulos 1-4, piezas y comentarios) para que lo que se manda a confirmar
+// sea EXACTAMENTE lo que se previsualizó — antes se podía seguir editando
+// Material/Copy después de "Ver preview" sin que eso invalidara nada.
+// "Editar" (ver acción pd2-editar-bloqueo) tira el preview y desbloquea.
+function bloquearFormularioV2(bloqueado) {
+  ['pd2-modulo-1', 'pd2-modulo-2', 'pd2-modulo-3', 'pd2-modulo-4', 'pd2-bulk-items', 'pd2-comentarios-wrap'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.pointerEvents = bloqueado ? 'none' : '';
+    el.style.opacity = bloqueado ? '.55' : '';
+  });
+  const btnEditar = document.getElementById('pd2-editar-bloqueo');
+  if (btnEditar) btnEditar.hidden = !bloqueado;
 }
 
 async function enviarBulkV2() {
@@ -3324,6 +3567,7 @@ async function enviarBulkV2() {
   const fechaInicio = document.getElementById('pd2-fecha-inicio').value;
   const fechaFin = document.getElementById('pd2-fecha-fin').value;
   const campana = document.getElementById('pd2-campana').value.trim();
+  const comentarios = document.getElementById('pd2-comentarios').value.trim();
 
   state.pd2BulkError = null;
   if (!objetivo.length) { state.pd2BulkError = 'Elegí el Objetivo (módulo 1) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
@@ -3371,6 +3615,10 @@ async function enviarBulkV2() {
 
   const redesCompartidas = state.pd2Visibilidad === 'PUBLICO' ? [] : state.pd2Redes;
   const endpoint = state.pd2ModoDirecto ? '/api/anuncios/crear-directo' : '/api/pedidos';
+  // Comparten bulkId todas las piezas de esta tanda — así Validación puede
+  // contar "cuántas van juntas" (ver buildVM). Con una sola pieza no es
+  // "bulk", no hace falta.
+  const bulkId = state.pd2BulkItems.length > 1 ? 'BULK-' + Date.now() : null;
 
   for (let i = 0; i < state.pd2BulkItems.length; i++) {
     const item = state.pd2BulkItems[i];
@@ -3430,6 +3678,9 @@ async function enviarBulkV2() {
           placements: state.pd2Visibilidad === 'PUBLICO' ? [] : state.pd2Placements,
           // Solo "Crear Anuncios": el reparto que se definió para esta pieza.
           reparto: hayQueRepartirPiezaV2(i) ? item.reparto : null,
+          comentarios,
+          combosExcluidos: Object.keys(state.pd2CombosExcluidos),
+          bulkId,
         }),
       });
       const data = await r.json();
@@ -3676,7 +3927,7 @@ function renderPantallaProyecto() {
       + '<span class="titulo">Ver todos los proyectos</span></button>'
     : '';
   document.getElementById('pantalla-proyecto-lista').innerHTML = opciones + opcionTodos
-    || '<p style="color:var(--color-neutral-500);font-size:13px">Este usuario no tiene proyectos asignados todavía.</p>';
+    || '<p style="color:var(--color-neutral-500);font-size:13px">Todavía no te asignaron ningún Proyecto — mientras tanto, elegí más abajo con qué usuario entrar.</p>';
 }
 
 function renderPantallaEcosistema() {
@@ -3809,6 +4060,7 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (action === 'all-to-cell') { e.stopPropagation(); allToCell(id, el.dataset.objetivo, el.dataset.aud); return; }
+  if (action === 'toggle-combo-bloqueado') { e.stopPropagation(); toggleComboBloqueado(id, el.dataset.objetivo, el.dataset.aud); return; }
   if (action === 'celda-hecha') { e.stopPropagation(); marcarCeldaHecha(id, el.dataset.objetivo, el.dataset.aud); return; }
   if (action === 'distribute-even') { e.stopPropagation(); distributeEven(id); return; }
   if (action === 'confirm-one') { e.stopPropagation(); confirmOne(id); return; }
@@ -3974,6 +4226,7 @@ document.addEventListener('change', (e) => {
         if (sel) sel.value = e.target.value;
       }
     });
+    renderCrucesV2();
     return;
   }
   if (e.target.id === 'pd2-visibilidad') {
@@ -4012,6 +4265,21 @@ document.addEventListener('change', (e) => {
     if (e.target.classList.contains('pd2-refuerzo-chk')) {
       document.getElementById('pd2-otras-refuerzo-wrap').hidden = !leerCheckboxes('pd2-refuerzo-chk').includes('Otra');
     }
+    renderCrucesV2();
+    return;
+  }
+  if (e.target.dataset.action === 'pd2-toggle-cruce') {
+    const clave = e.target.dataset.clave;
+    // No se puede destildar el último cruce que queda: la pieza necesita
+    // al menos uno para poder pedirse.
+    const checkedCount = document.querySelectorAll('#pd2-cruces-wrap input[type=checkbox]:checked').length;
+    if (!e.target.checked && checkedCount === 0) {
+      e.target.checked = true;
+      return;
+    }
+    if (e.target.checked) delete state.pd2CombosExcluidos[clave];
+    else state.pd2CombosExcluidos[clave] = true;
+    renderCrucesV2();
     return;
   }
   if (e.target.classList.contains('pd2-placement-chk')) {
@@ -4126,6 +4394,8 @@ document.addEventListener('change', (e) => {
     toggleSelect(e.target.dataset.id);
   } else if (e.target.dataset.action === 'set-pct') {
     setPct(e.target.dataset.id, e.target.dataset.objetivo, e.target.dataset.aud, parseFloat(e.target.value));
+  } else if (e.target.dataset.action === 'toggle-combo-excluido') {
+    toggleComboExcluido(e.target.dataset.id, e.target.dataset.objetivo, e.target.dataset.aud);
   } else if (e.target.dataset.action === 'toggle-misma-publicacion') {
     state.mismaPublicacion[e.target.dataset.id] = e.target.checked;
     render();

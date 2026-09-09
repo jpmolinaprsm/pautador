@@ -156,6 +156,8 @@ async function getItemCompleto(pauta, matrizDistribucionCache, equivTipo) {
     fecha: pauta.fecha,
     tipo_intensidad: tipoIntensidad,
     copy: pauta.copy,
+    comentarios: pauta.comentarios || '',
+    bulk_id: pauta.bulk_id || '',
     redes: pauta.redes || '',
     link_destino: pauta.link_destino,
     presupuesto: Number(pauta.presupuesto) || 0,

@@ -31,10 +31,17 @@ async function updateRowWhere(sheetName, criterios, updates) {
 }
 
 // Agrega una fila a partir de un objeto {columna: valor} en vez de un array
-// posicional — toma el orden real de columnas de una fila ya existente
-// (sheet_to_json preserva el orden del header), así el caller no tiene que
-// mantenerlo a mano ni romperse si el sheet le agrega columnas nuevas.
+// posicional. Supabase inserta por nombre directo (impl.insertObjeto) — no
+// hace falta adivinar nada. Excel/Sheets sí necesitan un array posicional
+// (una fila de spreadsheet no tiene "nombres de columna" propios): ahí se
+// toma el orden real de una fila ya existente (sheet_to_json preserva el
+// orden del header). Con la tabla vacía en Excel/Sheets se cae al orden de
+// declaración de `campos` como último recurso — puede quedar mal si no
+// coincide con el header real, pero ya no aplica a Supabase (ver bug real
+// que esto tuvo: con cola_pautas vacía, un valor terminó en la columna
+// timestamptz equivocada).
 async function insertarFila(sheetName, campos) {
+  if (impl.insertObjeto) return impl.insertObjeto(sheetName, campos);
   const todas = await readTable(sheetName);
   const header = todas.length ? Object.keys(todas[0]) : Object.keys(campos);
   await appendRow(sheetName, header.map((col) => (campos[col] !== undefined ? campos[col] : '')));

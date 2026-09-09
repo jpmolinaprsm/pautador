@@ -14,6 +14,10 @@ const authRoutes = require('./routes/auth');
 const app = express();
 
 app.use(express.json());
+// El browser no debería nunca servir un GET /api/* desde su caché HTTP —
+// pasó en vivo: una pieza recién corregida seguía mostrando la matriz
+// vieja hasta cerrar la pestaña, aunque el server ya devolvía bien.
+app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 app.use(express.static(path.join(__dirname, '..', 'public')));
 // Preview de los materiales subidos a mano (ver routes/pedidos.js —
 // POST /api/material/subir). Viven al lado de Tablas/, no adentro de

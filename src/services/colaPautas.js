@@ -55,6 +55,7 @@ function resolverAudiencia(codigo, textoLibre, audienciasActivo, tipo) {
       nombre: textoLibre || 'Audiencia personalizada',
       manual: true,
       saved_audience_id: null,
+      tamano: '',
     };
   }
   const match = audienciasActivo.find((a) => a.codigo_audiencia === codigo);
@@ -64,6 +65,10 @@ function resolverAudiencia(codigo, textoLibre, audienciasActivo, tipo) {
     nombre: match ? match.nombre_display : codigo,
     manual: !match,
     saved_audience_id: match ? match.saved_audience_id : null,
+    // Junto con el Tipo (Intensidad), define el presupuesto sugerido — ver
+    // resolverPresupuestoPorTipo en escalaPresupuestos.js. Se expone acá
+    // para que Validación pueda explicar "por qué" ese monto.
+    tamano: match ? match.tamaño || '' : '',
   };
 }
 
@@ -88,38 +93,48 @@ async function getMatrizParaPauta(pauta) {
   );
 
   const presupuestoTotal = Number(pauta.presupuesto) || 0;
-  const esMatriz = objetivos.length > 1 || audiencias.length > 1;
+
+  // Cruces que el PM/Cuentas desactivó al pedir (ver moduloValido/Módulo 2
+  // en el front) — ese Objetivo×Audiencia no existió nunca para esta pauta,
+  // ni en el reparto ni en Validación. Se guarda como "Objetivo|codigo",
+  // mismo formato de clave que usa el front.
+  const excluidos = new Set(parseLista(pauta.combos_excluidos).map((s) => s));
+
+  const combosCrudos = [];
+  objetivos.forEach((objetivo) => {
+    audiencias.forEach((audiencia) => {
+      if (excluidos.has(`${objetivo}|${audiencia.codigo}`)) return;
+      combosCrudos.push({ objetivo, audiencia });
+    });
+  });
+
+  const esMatriz = combosCrudos.length > 1;
 
   if (!esMatriz) {
-    const audiencia = audiencias[0];
+    const combo = combosCrudos[0] || { objetivo: objetivos[0] || pauta.objetivo, audiencia: audiencias[0] };
     return {
       esMatriz: false,
       presupuestoTotal,
       celdas: [
         {
-          objetivo: objetivos[0] || pauta.objetivo,
-          audiencia,
+          objetivo: combo.objetivo,
+          audiencia: combo.audiencia,
           porcentaje: 100,
           monto: presupuestoTotal,
-          manual: audiencia.manual,
+          manual: combo.audiencia.manual,
         },
       ],
     };
   }
 
-  const totalCeldas = objetivos.length * audiencias.length;
+  const totalCeldas = combosCrudos.length;
   // Reparto parejo que suma EXACTO 100: con 3 celdas, 100/3 redondeado da
   // 33,33 × 3 = 99,99 y se perdían pesos del presupuesto (y el total nunca
   // cerraba). El resto del redondeo se le suma a la última celda, igual que
   // hace "Repartir parejo" en la pantalla.
   const pctBase = totalCeldas ? Math.floor((100 / totalCeldas) * 100) / 100 : 0;
 
-  const celdas = [];
-  objetivos.forEach((objetivo) => {
-    audiencias.forEach((audiencia) => {
-      celdas.push({ objetivo, audiencia, porcentaje: pctBase, manual: audiencia.manual });
-    });
-  });
+  const celdas = combosCrudos.map(({ objetivo, audiencia }) => ({ objetivo, audiencia, porcentaje: pctBase, manual: audiencia.manual }));
   if (celdas.length) {
     const ultima = celdas[celdas.length - 1];
     ultima.porcentaje = +(100 - pctBase * (celdas.length - 1)).toFixed(2);

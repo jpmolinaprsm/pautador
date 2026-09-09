@@ -1,14 +1,13 @@
 // Inserta una fila nueva en cola_pautas — usado por los dos flujos de
 // "Crear Anuncios" (publicar contenido existente / crear anuncio Dark).
-// El orden de columnas se toma de una fila ya existente (sheet_to_json
-// preserva el orden del header real), así no hay que mantenerlo a mano.
+// Delega en dataSource.insertarFila (inserta por nombre de columna en
+// Supabase, sin adivinar orden — ver ese archivo para el porqué: con la
+// tabla vacía, adivinar el orden metía valores en columnas equivocadas).
 
-const { readTable, appendRow } = require('./dataSource');
+const { insertarFila } = require('./dataSource');
 
 async function insertarFilaColaPautas(campos) {
-  const todas = await readTable('cola_pautas');
-  const header = todas.length ? Object.keys(todas[0]) : Object.keys(campos);
-  await appendRow('cola_pautas', header.map((col) => (campos[col] !== undefined ? campos[col] : '')));
+  await insertarFila('cola_pautas', campos);
 }
 
 module.exports = { insertarFilaColaPautas };

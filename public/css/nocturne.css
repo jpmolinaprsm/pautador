@@ -221,7 +221,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 /* — tags — */
 .tag {
   display: inline-flex; align-items: center; font-size: 11px;
-  letter-spacing: 0.02em; padding: 3px 10px;
+  letter-spacing: 0.02em; padding: 3px 10px; white-space: nowrap;
   border-radius: calc(var(--radius-md) * 0.75);
 }
 .tag-accent { background: var(--color-accent-800); color: var(--color-accent-100); }

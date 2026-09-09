@@ -44,7 +44,15 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   const {
     proyecto, activoKey, ejeCodigo, tipoCodigo, campana, linea, visibilidad, formato,
     objetivo, audienciaCodigo, otraAudiencia, refuerzoAudiencia, otrasRefuerzo,
-    material, copy, presupuesto: presupuestoManual, fechaInicio, fechaFin, linkDestino, post,
+    material, copy, presupuesto: presupuestoManual, fechaInicio, fechaFin, linkDestino, post, comentarios,
+    // Cruces Objetivo×Audiencia que el PM desactivó antes de pedir (ver
+    // Módulo 2 en el front) — quedan afuera para siempre, ni Validación los
+    // ve (getMatrizParaPauta en colaPautas.js los filtra al armar la matriz).
+    combosExcluidos,
+    // Comparten el mismo bulkId todas las piezas de una misma tanda (Módulo
+    // 5, "Cantidad de piezas" > 1) — ver enviarBulkV2 en el front. Sirve
+    // para que Validación pueda contar "cuántas van juntas en este grupo".
+    bulkId,
     // Solo tiene sentido cuando el Placement incluye Stories JUNTO con
     // Feed/Reels y las dos imágenes no son la misma (ver metaAdapterReal.js:
     // crearCreative arma un asset_feed_spec con las dos en vez del
@@ -245,6 +253,9 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     row_id: codigo,
     activo_solicitado: activoKey,
     imagen_preview: (post && post.imagen) || '',
+    comentarios: comentarios || '',
+    combos_excluidos: Array.isArray(combosExcluidos) ? combosExcluidos.join(',') : '',
+    bulk_id: bulkId || '',
   });
 
   // 2) ...y de una la "termina" (mismo paso que antes hacía Crear Anuncios):

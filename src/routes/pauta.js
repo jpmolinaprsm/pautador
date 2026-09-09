@@ -133,8 +133,9 @@ router.post('/pauta/:id/marcar-manual', requireRol('implementador', 'administrad
 // POST /api/pauta/:id/desestimar — rechazar el pedido: no se pauta y sale
 // de la cola. El motivo es obligatorio y queda guardado en la fila: es lo
 // único que le queda a quien pidió la pauta para entender qué corregir.
+// PM/Cuentas puede desestimar sus propios pedidos, no solo Implementador.
 // Body: { motivo }
-router.post('/pauta/:id/desestimar', requireRol('implementador', 'administrador'), async (req, res) => {
+router.post('/pauta/:id/desestimar', requireRol('pm_cuentas', 'implementador', 'administrador'), async (req, res) => {
   try {
     const resultado = await desestimarPauta(req.params.id, req.body.motivo, req.usuario.nombre);
     res.json(resultado);

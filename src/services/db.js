@@ -42,7 +42,7 @@ const COLUMNAS = {
     'audiencia_resuelta', 'plataformas_resueltas', 'optimization_goal', 'modo', 'errores_preview',
     'adset_id', 'creative_id', 'ad_id', 'publicado_en', 'n8n_execution_id', 'error_publicacion',
     'activo_solicitado', 'imagen_preview', 'desestimado_por', 'desestimado_en', 'motivo_desestimacion', 'redes',
-    'material_stories',
+    'material_stories', 'comentarios', 'combos_excluidos',
   ],
   config_activos: [
     'proyecto', 'activo', 'activo_key', 'activo_habilitado', 'bm_id', 'ad_account_id', 'page_id',
@@ -115,6 +115,18 @@ async function appendRow(sheetName, rowValues) {
   if (error) throw new Error(`Supabase: no pude insertar en "${sheetName}": ${error.message}`);
 }
 
+// Igual que appendRow, pero por nombre de columna en vez de posición —
+// insertarFila (dataSource.js) la usa cuando existe para no tener que
+// ADIVINAR el orden de columnas leyendo una fila ya existente (bug real:
+// con la tabla vacía, esa adivinanza usaba el orden de declaración del
+// objeto JS pasado por el caller, que no tiene por qué coincidir con
+// COLUMNAS[sheetName] — mandaba valores a columnas equivocadas sin avisar,
+// salvo que el tipo de dato chocara feo como pasó acá con un timestamptz).
+async function insertObjeto(sheetName, campos) {
+  const { error } = await getClient().from(sheetName).insert(sanearParaEscritura(campos));
+  if (error) throw new Error(`Supabase: no pude insertar en "${sheetName}": ${error.message}`);
+}
+
 async function updateRow(sheetName, matchColumn, matchValue, updates) {
   const { error } = await getClient().from(sheetName).update(sanearParaEscritura(updates)).eq(matchColumn, matchValue);
   if (error) {
@@ -138,4 +150,4 @@ async function updateRowWhere(sheetName, criterios, updates) {
 // COLUMNAS también se exporta para supabase/migrar.js: necesita la misma
 // lista para descartar columnas que están en el Excel (ej. la nota
 // "DÓNDE ENCONTRAR ESTE DATO" de config_activos) pero no en el esquema real.
-module.exports = { readTable, appendRow, updateRow, updateRowWhere, COLUMNAS };
+module.exports = { readTable, appendRow, insertObjeto, updateRow, updateRowWhere, COLUMNAS };
