@@ -2179,21 +2179,7 @@ function armarPedidoDesdeCsv(campos, proyecto, activoKey) {
 }
 
 function descargarModeloCsv() {
-  const ejemplo = {
-    campana: 'Campaña de ejemplo', linea: '', eje: 'Deportes', tipo: 'Baja',
-    objetivo: 'Alcance Normal', formato: 'Imagen', redes: 'Facebook,Instagram', placements: 'feed',
-    audiencia: 'Argentina general (sandbox)',
-    otraAudiencia: '', refuerzoAudiencia: '', otrasRefuerzo: '',
-    material: 'https://drive.google.com/...', materialStories: '', copy: 'Texto del anuncio',
-    fechaInicio: '2026-09-10', fechaFin: '2026-09-17', linkDestino: '',
-  };
-  const contenido = CSV_COLUMNAS.join(',') + '\n' + CSV_COLUMNAS.map((c) => ejemplo[c]).join(',') + '\n';
-  const blob = new Blob([contenido], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'modelo-pautador.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  window.open('https://docs.google.com/spreadsheets/d/1ApwEvzldA0eyH_-wRuihFq4ulhTijlOkuTMfKN4wrdo/edit?gid=1283105071#gid=1283105071', '_blank', 'noopener');
 }
 
 function renderCsvSelectores() {
