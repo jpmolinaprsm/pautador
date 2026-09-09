@@ -633,6 +633,40 @@ async function marcarCeldaHecha(id, objetivo, audCodigo) {
   }
 }
 
+// Marca TODAS las celdas manuales pendientes de una — antes había que ir
+// celda por celda con "Marcar hecha" aunque para quien lo carga en Meta sea
+// un solo trámite (el carril entero, no una celda a la vez).
+async function marcarTodoManualHecho(id) {
+  const it = findItem(id);
+  if (!it) return;
+  const pendientes = it.celdas.filter((c) => c.manual && c.estadoCelda !== 'manual_hecha' && c.estadoCelda !== 'manual');
+  if (!pendientes.length) return;
+  const clave = `${id}|__todo_manual`;
+  state.accionEnCurso[clave] = 'celda';
+  render();
+  try {
+    for (let i = 0; i < pendientes.length; i += 1) {
+      const c = pendientes[i];
+      // eslint-disable-next-line no-await-in-loop
+      const r = await apiFetch(`/api/pauta/${encodeURIComponent(id)}/celda-hecha`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ objetivo: c.objetivo, audiencia_codigo: c.audCodigo }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detalle || data.error || 'No se pudo marcar');
+    }
+    state.toast = { titulo: 'Marcado hecho a mano', lines: [{ codigo: it.codigo, resumen: `${pendientes.length} conjunto(s) manual(es) cargados a mano en Meta.` }] };
+    delete state.accionEnCurso[clave];
+    await cargarItems();
+  } catch (err) {
+    state.error = err.message;
+    delete state.accionEnCurso[clave];
+    render();
+  }
+}
+
 async function guardarPresupuesto(id, presupuesto) {
   const it = findItem(id);
   try {
@@ -888,6 +922,52 @@ function buildVM(item) {
   };
 }
 
+// El carril automático (audiencia real, lo publica PAUTADOR) y el manual
+// (audiencia "Otra", se carga a mano) se resuelven por vías separadas — uno
+// no espera al otro (ver renderCarriles). Antes convivían en una sola fila
+// de la cola de Validación aunque uno pudiera cerrarse sin el otro; acá se
+// separan en dos filas de la lista, cada una con su propio expand. Las
+// acciones de todo el pedido (Desestimar/Editar/Comentarios) siguen
+// apuntando al mismo vm.id — siguen siendo el mismo pedido, solo se lo
+// muestra en dos filas porque el trabajo de cada parte es independiente.
+function splitVMSiMixto(vm) {
+  if (!vm.combos.length) return [vm];
+  const comboAuto = vm.combos.filter((c) => !c.manual);
+  const comboManual = vm.combos.filter((c) => c.manual);
+  if (!comboAuto.length || !comboManual.length) return [vm];
+
+  const etiquetaAudiencias = (combos) => {
+    const nombres = combos.map((c) => c.audNombre).filter((v, i, arr) => arr.indexOf(v) === i);
+    return nombres.length > 1 ? nombres[0] + ' +' + (nombres.length - 1) + ' más' : (nombres[0] || '—');
+  };
+  const etiquetaObjetivos = (combos) => combos.map((c) => c.objetivo).filter((v, i, arr) => arr.indexOf(v) === i).join(' + ');
+  const montoDe = (combos) => combos.reduce((a, c) => a + c.monto, 0);
+  const bulkTag = vm.tags.find((t) => t.label.indexOf('Bulk') === 0);
+
+  const parte = (sufijo, combos, tagsParte, soloParte) => {
+    const rowKey = vm.id + '::' + sufijo;
+    return Object.assign({}, vm, {
+      rowKey,
+      isExpanded: state.expandedId === rowKey,
+      chevronClass: 'ph ' + (state.expandedId === rowKey ? 'ph-caret-down' : 'ph-caret-right'),
+      combos,
+      tags: tagsParte,
+      objetivosLabel: etiquetaObjetivos(combos),
+      audienciaLabel: etiquetaAudiencias(combos),
+      presupuestoLabel: fmtMoney(montoDe(combos)),
+      soloParte,
+    });
+  };
+
+  const tagsAuto = [{ label: `${comboAuto.length} conjunto${comboAuto.length > 1 ? 's' : ''}`, clase: 'tag tag-accent' }].concat(bulkTag ? [bulkTag] : []);
+  const tagsManual = [{ label: 'Hacer Manual', clase: 'tag tag-outline' }].concat(bulkTag ? [bulkTag] : []);
+
+  return [
+    parte('auto', comboAuto, tagsAuto, 'auto'),
+    parte('manual', comboManual, tagsManual, 'manual'),
+  ];
+}
+
 // ---------- Render ----------
 
 function esc(s) {
@@ -904,7 +984,7 @@ function renderRowLine(vm, columnsCss, isHistorial) {
   const chevronCell = isHistorial ? '' : `<div style="text-align:center"><i class="${vm.chevronClass}"></i></div>`;
 
   return `
-    <div class="row-line" style="grid-template-columns:${columnsCss}${isHistorial ? '' : ''}" data-action="toggle-expand" data-id="${vm.id}">
+    <div class="row-line" style="grid-template-columns:${columnsCss}${isHistorial ? '' : ''}" data-action="toggle-expand" data-id="${vm.rowKey || vm.id}">
       ${checkboxCell}
       <div class="row-ellip">${esc(vm.activoNombre)}${vm.isDark ? ' <span class="tag tag-neutral">DARK</span>' : ''}</div>
       <div class="row-ellip">${esc(vm.eje)}</div>
@@ -1033,7 +1113,7 @@ function renderColumnaPresupuesto(vm, editorPresupuesto) {
     </div>`;
   return `
     <div style="width:220px;flex:none;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;display:flex;flex-direction:column;gap:12px">
-      ${dato('Presupuesto total', vm.presupuestoLabel)}
+      ${dato(vm.soloParte ? 'Presupuesto de esta parte' : 'Presupuesto total', vm.presupuestoLabel)}
       ${bloqueTamano}
       ${vm.tipoIntensidad ? dato('Tipo de Campaña', vm.tipoIntensidad) : ''}
       ${editorPresupuesto}
@@ -1103,13 +1183,17 @@ function renderCarriles(vm, confirmando) {
   let bloqueManual = '';
   if (manual.length) {
     const pendientes = manual.filter((c) => c.estadoCelda !== 'manual_hecha' && c.estadoCelda !== 'manual').length;
+    const marcandoTodo = state.accionEnCurso[`${vm.id}|__todo_manual`] === 'celda';
     bloqueManual = `
       <div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-top:12px">
         <div style="margin-bottom:8px">${titulo('Manual', `${manual.length} conjunto(s) — los cargás vos en Meta${pendientes ? '' : ' · todo marcado'}`)}</div>
         <div style="display:flex;flex-direction:column;gap:8px">
           ${manual.map((c) => renderCombo(vm, c)).join('')}
         </div>
-        <div style="font-size:14px;font-family:var(--font-heading);margin-top:14px">Este carril: ${subtotal(manual)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
+          <div style="font-size:14px;font-family:var(--font-heading)">Este carril: ${subtotal(manual)}</div>
+          ${(pendientes > 1 && puedeEditarValidacion()) ? `<button class="btn btn-primary" ${marcandoTodo ? 'disabled' : ''} data-action="marcar-todo-manual" data-id="${vm.id}">${marcandoTodo ? '<span class="spinner-inline"></span>Marcando…' : 'Marcar todo hecho'}</button>` : ''}
+        </div>
       </div>`;
   }
 
@@ -1181,11 +1265,26 @@ function renderExpandContent(vm) {
   // (Eje/Fecha/Duración + Oculto-Público/Formato/Objetivo/Audiencias),
   // 3) Comentarios + Editar Pedido/Desestimar Pedido (apilados a la
   // derecha — si el comentario es largo y el renglón crece, los botones
-  // siguen ocupando lo mismo en vez de estirarse horizontal).
+  // siguen ocupando lo mismo en vez de estirarse horizontal). Sin
+  // comentarios no tiene sentido reservar ese renglón entero solo para los
+  // botones: se suman a la fila del título (pedido del usuario — ocupaba
+  // mucho espacio vacío) y se salta la fila 3 por completo.
+  const tieneComentarios = !!vm.comentarios;
+  const accionesTriggers = `${editarTrigger}${desestimarTrigger}`;
+  const filaComentarios = tieneComentarios ? `
+    <div style="display:flex;align-items:stretch;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+      <div style="flex:1;min-width:260px;font-size:13px;color:var(--color-neutral-300);background:var(--color-bg);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:8px 12px">
+        <span style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--color-neutral-500)">Comentarios: </span>${esc(vm.comentarios)}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;flex:none">
+        ${accionesTriggers}
+      </div>
+    </div>` : '';
   const header = `
-    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:20px;margin-bottom:8px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:8px;flex-wrap:wrap">
       <h4 style="margin:0">${esc(vm.campana)}${vm.contenido ? ' - ' + esc(vm.contenido) : ''}</h4>
-      <div style="display:flex;align-items:center;gap:14px;flex:none">
+      <div style="display:flex;align-items:center;gap:14px;flex:none;flex-wrap:wrap">
+        ${tieneComentarios ? '' : accionesTriggers}
         <span class="tag tag-accent" style="font-family:monospace">${esc(vm.codigo)}</span>
         ${vm.publicacionLink ? `<a href="${esc(vm.publicacionLink)}" target="_blank" rel="noopener" style="font-size:13px;display:flex;gap:6px;align-items:center"><i class="ph ph-arrow-square-out"></i>Ver publicación</a>` : ''}
         ${vm.linkDestino ? `<a href="${esc(vm.linkDestino)}" target="_blank" rel="noopener" style="font-size:13px;display:flex;gap:6px;align-items:center"><i class="ph ph-link"></i>${esc(vm.linkDestino)}</a>` : ''}
@@ -1195,16 +1294,7 @@ function renderExpandContent(vm) {
       <span>Eje: ${esc(vm.eje)} · Fecha: ${esc(vm.fecha)} · ${esc(vm.duracionLabel)}</span>
       ${categorias}
     </div>
-    <div style="display:flex;align-items:stretch;gap:16px;flex-wrap:wrap;margin-bottom:16px">
-      ${vm.comentarios ? `
-      <div style="flex:1;min-width:260px;font-size:13px;color:var(--color-neutral-300);background:var(--color-bg);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:8px 12px">
-        <span style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--color-neutral-500)">Comentarios: </span>${esc(vm.comentarios)}
-      </div>` : '<div style="flex:1"></div>'}
-      <div style="display:flex;flex-direction:column;gap:8px;flex:none">
-        ${editarTrigger}
-        ${desestimarTrigger}
-      </div>
-    </div>
+    ${filaComentarios}
   `;
 
   const desestimarPanel = renderDesestimarPanel(vm, desestimarAbierto);
@@ -1508,8 +1598,12 @@ function render() {
 
   document.getElementById('pendientes-count').textContent = pendientes.length + ' pendientes';
 
-  document.getElementById('lista-pendientes').innerHTML = pendientes.length
-    ? pendientes.map((vm) => renderItemRow(vm, COLS_PENDIENTES, false)).join('')
+  // Si una pieza mezcla celdas automáticas y manuales (audiencia "Otra" +
+  // audiencia real, por ejemplo), se muestra como dos filas separadas — cada
+  // carril se confirma/marca por su cuenta (ver splitVMSiMixto).
+  const filasPendientes = pendientes.reduce((acc, vm) => acc.concat(splitVMSiMixto(vm)), []);
+  document.getElementById('lista-pendientes').innerHTML = filasPendientes.length
+    ? filasPendientes.map((vm) => renderItemRow(vm, COLS_PENDIENTES, false)).join('')
     : '<p style="color:var(--color-neutral-500);padding:16px 10px">No hay piezas esperando validación. Las que se carguen desde "Pedido de Anuncios" aparecen acá.</p>';
 
   const historialWrap = document.getElementById('historial-toggle-wrap');
@@ -4128,6 +4222,7 @@ document.addEventListener('click', (e) => {
   if (action === 'distribute-even') { e.stopPropagation(); distributeEven(id); return; }
   if (action === 'confirm-one') { e.stopPropagation(); confirmOne(id); return; }
   if (action === 'mark-manual') { e.stopPropagation(); markManual(id); return; }
+  if (action === 'marcar-todo-manual') { e.stopPropagation(); marcarTodoManualHecho(id); return; }
   if (action === 'desestimar-abrir') { e.stopPropagation(); state.desestimandoId = id; state.desestimarError = null; state.editandoId = null; render(); return; }
   if (action === 'desestimar-cancelar') { e.stopPropagation(); state.desestimandoId = null; state.desestimarError = null; render(); return; }
   if (action === 'desestimar-confirmar') { e.stopPropagation(); desestimar(id); return; }
