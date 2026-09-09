@@ -43,17 +43,22 @@ router.post('/pedidos', requireRol('pm_cuentas', 'administrador'), async (req, r
   }
 });
 
-// POST /api/pedidos/validar-lote — carga por CSV: valida cada fila SIN
-// crear nada (mismo crearPedido de siempre, en modo soloValidar), para
-// armar el preview con el error puntual de cada fila. Una fila mal armada
-// no corta la validación de las demás.
-router.post('/pedidos/validar-lote', requireRol('pm_cuentas', 'administrador'), async (req, res) => {
+// POST /api/pedidos/validar-lote — valida cada fila SIN crear nada (mismo
+// crearPedido de siempre, en modo soloValidar: corre TODAS las
+// validaciones — campos obligatorios, material real, reparto — y corta
+// antes del primer write). Una fila mal armada no corta la validación de
+// las demás. La usa la carga por CSV (publicar=false siempre) y el preview
+// de "Pedido de Anuncios"/"Crear Anuncios" bulk (publicar según el modo),
+// para que el aviso de "falta el Copy" salga al pedir el preview y no
+// recién al confirmar, con el formulario ya bloqueado.
+router.post('/pedidos/validar-lote', requireRol('pm_cuentas', 'implementador', 'administrador'), async (req, res) => {
   const filas = Array.isArray(req.body.filas) ? req.body.filas : [];
+  const publicar = !!req.body.publicar;
   const resultados = [];
   for (let i = 0; i < filas.length; i += 1) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      await crearPedido(filas[i], req.usuario, { soloValidar: true });
+      await crearPedido(filas[i], req.usuario, { soloValidar: true, publicar });
       resultados.push({ index: i, ok: true });
     } catch (err) {
       resultados.push({ index: i, ok: false, error: err.message });

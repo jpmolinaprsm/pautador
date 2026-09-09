@@ -3299,9 +3299,101 @@ function renderBulkItemsV2() {
   document.getElementById('pd2-bulk-items').innerHTML = state.pd2BulkItems.map((item, i) => renderItemBulkV2(i)).join('');
 }
 
+// Campos del Módulo 1-4 (compartidos por todas las piezas de la tanda) —
+// se arman una sola vez y se reusan tanto para validar el preview (sin
+// crear nada) como para la creación real, así los dos caminos mandan
+// EXACTAMENTE los mismos datos y no se puede confirmar algo que el preview
+// nunca vio.
+function armarContextoBulkV2() {
+  return {
+    objetivo: leerCheckboxes('pd2-objetivo-chk'),
+    audienciaCodigo: document.getElementById('pd2-audiencia').value,
+    otraAudiencia: document.getElementById('pd2-otra-audiencia').value.trim(),
+    refuerzoAudiencia: leerCheckboxes('pd2-refuerzo-chk'),
+    otrasRefuerzo: document.getElementById('pd2-otras-refuerzo').value.trim(),
+    linkDestino: document.getElementById('pd2-link-destino').value.trim(),
+    formatoInput: document.getElementById('pd2-formato'),
+    fechaInicio: document.getElementById('pd2-fecha-inicio').value,
+    fechaFin: document.getElementById('pd2-fecha-fin').value,
+    campana: document.getElementById('pd2-campana').value.trim(),
+    comentarios: document.getElementById('pd2-comentarios').value.trim(),
+    bulkId: state.pd2BulkItems.length > 1 ? 'BULK-' + Date.now() : null,
+  };
+}
+
+// El payload que espera /api/pedidos y /api/anuncios/crear-directo para UNA
+// pieza — mismo shape para validar (soloValidar, ver verificarMaterialesBulkV2)
+// y para crear de verdad (ver enviarBulkV2).
+function armarDatosPiezaV2(i, ctx) {
+  const item = state.pd2BulkItems[i];
+  const prefix = `pd2bulk${i}`;
+  const formatoInfoPieza = formatoInfoPd2Actual();
+  const usaCarrusel = state.pd2Visibilidad !== 'PUBLICO' && formatoInfoPieza && formatoInfoPieza.modo === 'carrusel';
+  const materialCarrusel = usaCarrusel ? resolverMaterialCarruselV2(i).join('|') : null;
+  const materialInput = document.getElementById(`${prefix}-material`);
+  const copyInput = document.getElementById(`${prefix}-copy`);
+  const linea = document.getElementById(`${prefix}-linea`).value.trim();
+  const presupuestoEl = document.getElementById(`${prefix}-presupuesto`);
+  const presupuesto = state.pd2ModoDirecto && presupuestoEl ? presupuestoEl.value : null;
+
+  // Material de Stories: solo se manda si el bloque está visible (Stories +
+  // otro placement) — igual que el material principal, archivo subido gana
+  // sobre el link tipeado.
+  const materialStoriesWrap = document.getElementById(`${prefix}-material-stories-wrap`);
+  const materialStoriesArchivo = item.materialStoriesModo === 'archivo' && item.materialStoriesArchivo
+    ? item.materialStoriesArchivo.material
+    : null;
+  const materialStoriesInput = document.getElementById(`${prefix}-material-stories`);
+  const materialStoriesFinal = (materialStoriesWrap && !materialStoriesWrap.hidden)
+    ? (materialStoriesArchivo || (materialStoriesInput ? materialStoriesInput.value.trim() : ''))
+    : '';
+
+  const redesCompartidas = state.pd2Visibilidad === 'PUBLICO' ? [] : state.pd2Redes;
+
+  return {
+    proyecto: state.pd2Proyecto,
+    activoKey: state.pd2ActivoKey,
+    ejeCodigo: state.pd2EjeCodigo,
+    tipoCodigo: state.pd2TipoCodigo,
+    campana: ctx.campana,
+    linea,
+    visibilidad: state.pd2Visibilidad,
+    formato: ctx.formatoInput ? ctx.formatoInput.value : '',
+    objetivo: ctx.objetivo,
+    audienciaCodigo: item.audienciaCodigo || ctx.audienciaCodigo,
+    otraAudiencia: item.audienciaCodigo === 'Otra' ? (item.otraAudienciaTexto || '') : ctx.otraAudiencia,
+    refuerzoAudiencia: ctx.refuerzoAudiencia,
+    otrasRefuerzo: ctx.otrasRefuerzo,
+    material: materialCarrusel || (item.modoMaterial === 'archivo' && item.archivoSubido
+      ? item.archivoSubido.material
+      : (materialInput ? materialInput.value.trim() : '')),
+    materialStories: materialStoriesFinal,
+    post: state.pd2Visibilidad === 'PUBLICO' && item.modoMaterial === 'post' ? item.postSeleccionado : null,
+    copy: copyInput ? copyInput.value.trim() : '',
+    presupuesto,
+    fechaInicio: ctx.fechaInicio,
+    fechaFin: ctx.fechaFin,
+    linkDestino: ctx.linkDestino,
+    redes: state.pd2Visibilidad === 'PUBLICO' && item.postSeleccionado
+      ? [item.postSeleccionado.plataforma === 'Instagram' ? 'instagram' : 'facebook']
+      : redesCompartidas,
+    placements: state.pd2Visibilidad === 'PUBLICO' ? [] : state.pd2Placements,
+    // Solo "Crear Anuncios": el reparto que se definió para esta pieza.
+    reparto: hayQueRepartirPiezaV2(i) ? item.reparto : null,
+    comentarios: ctx.comentarios,
+    combosExcluidos: Object.keys(state.pd2CombosExcluidos),
+    bulkId: ctx.bulkId,
+  };
+}
+
 // Mismo criterio que verificarMaterialesBulk() en v1: se verifican TODAS
-// las piezas primero y no se manda nada si alguna falla.
-async function verificarMaterialesBulkV2() {
+// las piezas primero y no se manda nada si alguna falla. Además del
+// material (esto), se valida contra el server TODO lo demás que exige
+// crearPedido (Copy, Formato, Link de destino con Objetivo Tráfico, etc.)
+// — antes eso recién se descubría al confirmar, con el formulario ya
+// bloqueado y sin forma de corregirlo (ver reporte de bug del usuario).
+async function verificarMaterialesBulkV2(ctxParam) {
+  const ctx = ctxParam || armarContextoBulkV2();
   state.pd2BulkVerificando = true;
   state.pd2BulkPreviews = null;
   const btn = document.getElementById('pd2-bulk-crear');
@@ -3353,6 +3445,32 @@ async function verificarMaterialesBulkV2() {
     } catch (err) {
       previews.push({ i, ok: false, error: err.message });
     }
+  }
+
+  // El material puede estar perfecto y aun así faltar algo que solo sabe
+  // crearPedido (Copy, Formato, Link de destino con Objetivo Tráfico,
+  // Activo/Eje/Tipo, reparto) — se valida acá TAMBIÉN contra el servidor
+  // (soloValidar: corre todas las validaciones, no crea nada) antes de dar
+  // el preview por bueno y bloquear el formulario.
+  try {
+    const filas = state.pd2BulkItems.map((item, i) => armarDatosPiezaV2(i, ctx));
+    const r = await apiFetch('/api/pedidos/validar-lote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filas, publicar: state.pd2ModoDirecto }),
+    });
+    const data = await r.json();
+    if (r.ok && Array.isArray(data.resultados)) {
+      data.resultados.forEach((res) => {
+        if (res.ok) return;
+        const preview = previews.find((p) => p.i === res.index);
+        // El material ya tenía su propio error, más específico — no lo piso.
+        if (preview && preview.ok) { preview.ok = false; preview.error = res.error; }
+      });
+    }
+  } catch (err) {
+    // Si este chequeo no responde, no bloqueamos el preview de material por
+    // eso — el servidor igual va a rechazar al confirmar.
   }
 
   state.pd2BulkPreviews = previews;
@@ -3559,23 +3677,12 @@ function bloquearFormularioV2(bloqueado) {
 
 async function enviarBulkV2() {
   sincronizarBulkAudienciasDesdeDOMV2();
-
-  const objetivo = leerCheckboxes('pd2-objetivo-chk');
-  const audienciaCodigo = document.getElementById('pd2-audiencia').value;
-  const otraAudiencia = document.getElementById('pd2-otra-audiencia').value.trim();
-  const refuerzoAudiencia = leerCheckboxes('pd2-refuerzo-chk');
-  const otrasRefuerzo = document.getElementById('pd2-otras-refuerzo').value.trim();
-  const linkDestino = document.getElementById('pd2-link-destino').value.trim();
-  const formatoInput = document.getElementById('pd2-formato');
-  const fechaInicio = document.getElementById('pd2-fecha-inicio').value;
-  const fechaFin = document.getElementById('pd2-fecha-fin').value;
-  const campana = document.getElementById('pd2-campana').value.trim();
-  const comentarios = document.getElementById('pd2-comentarios').value.trim();
+  const ctx = armarContextoBulkV2();
 
   state.pd2BulkError = null;
-  if (!objetivo.length) { state.pd2BulkError = 'Elegí el Objetivo (módulo 1) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
-  if (!campana) { state.pd2BulkError = 'Escribí la Campaña / Comunicación (módulo 1) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
-  if (!audienciaCodigo) { state.pd2BulkError = 'Elegí la Audiencia principal (módulo 2) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
+  if (!ctx.objetivo.length) { state.pd2BulkError = 'Elegí el Objetivo (módulo 1) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
+  if (!ctx.campana) { state.pd2BulkError = 'Escribí la Campaña / Comunicación (módulo 1) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
+  if (!ctx.audienciaCodigo) { state.pd2BulkError = 'Elegí la Audiencia principal (módulo 2) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
   if (!state.pd2BulkItems.length) { state.pd2BulkError = 'Elegí la Cantidad de piezas (módulo 4) antes de continuar.'; renderBulkErrorV2(); return; }
 
   // Mismo chequeo que en v1, pieza por pieza: si alguna no llega al mínimo
@@ -3588,8 +3695,8 @@ async function enviarBulkV2() {
       const presEl = document.getElementById(`pd2bulk${i}-presupuesto`);
       const audEl = document.getElementById(`pd2bulk${i}-audiencia`);
       const falta = faltaPresupuesto(
-        presEl ? presEl.value : '', objetivo, audEl ? audEl.value : (item.audienciaCodigo || ''),
-        refuerzoAudiencia, fechaInicio, fechaFin
+        presEl ? presEl.value : '', ctx.objetivo, audEl ? audEl.value : (item.audienciaCodigo || ''),
+        ctx.refuerzoAudiencia, ctx.fechaInicio, ctx.fechaFin
       );
       if (falta) flojas.push({ i, falta });
       if (repartoInvalidoV2(i)) flojas.push({ i, reparto: true });
@@ -3605,7 +3712,7 @@ async function enviarBulkV2() {
   }
 
   if (!state.pd2BulkPreviews || state.pd2BulkPreviews.some((p) => !p.ok)) {
-    await verificarMaterialesBulkV2();
+    await verificarMaterialesBulkV2(ctx);
     return;
   }
 
@@ -3616,75 +3723,14 @@ async function enviarBulkV2() {
   btn.textContent = 'Creando…';
   renderResultadoBulkV2();
 
-  const redesCompartidas = state.pd2Visibilidad === 'PUBLICO' ? [] : state.pd2Redes;
   const endpoint = state.pd2ModoDirecto ? '/api/anuncios/crear-directo' : '/api/pedidos';
-  // Comparten bulkId todas las piezas de esta tanda — así Validación puede
-  // contar "cuántas van juntas" (ver buildVM). Con una sola pieza no es
-  // "bulk", no hace falta.
-  const bulkId = state.pd2BulkItems.length > 1 ? 'BULK-' + Date.now() : null;
 
   for (let i = 0; i < state.pd2BulkItems.length; i++) {
-    const item = state.pd2BulkItems[i];
-    const prefix = `pd2bulk${i}`;
-    const formatoInfoPieza = formatoInfoPd2Actual();
-    const usaCarrusel = state.pd2Visibilidad !== 'PUBLICO' && formatoInfoPieza && formatoInfoPieza.modo === 'carrusel';
-    const materialCarrusel = usaCarrusel ? resolverMaterialCarruselV2(i).join('|') : null;
-    const materialInput = document.getElementById(`${prefix}-material`);
-    const copyInput = document.getElementById(`${prefix}-copy`);
-    const linea = document.getElementById(`${prefix}-linea`).value.trim();
-    const presupuestoEl = document.getElementById(`${prefix}-presupuesto`);
-    const presupuesto = state.pd2ModoDirecto && presupuestoEl ? presupuestoEl.value : null;
-
-    // Material de Stories: solo se manda si el bloque está visible (Stories
-    // + otro placement) — igual que el material principal, archivo subido
-    // gana sobre el link tipeado.
-    const materialStoriesWrap = document.getElementById(`${prefix}-material-stories-wrap`);
-    const materialStoriesArchivo = item.materialStoriesModo === 'archivo' && item.materialStoriesArchivo
-      ? item.materialStoriesArchivo.material
-      : null;
-    const materialStoriesInput = document.getElementById(`${prefix}-material-stories`);
-    const materialStoriesFinal = (materialStoriesWrap && !materialStoriesWrap.hidden)
-      ? (materialStoriesArchivo || (materialStoriesInput ? materialStoriesInput.value.trim() : ''))
-      : '';
-
     try {
       const r = await apiFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          proyecto: state.pd2Proyecto,
-          activoKey: state.pd2ActivoKey,
-          ejeCodigo: state.pd2EjeCodigo,
-          tipoCodigo: state.pd2TipoCodigo,
-          campana,
-          linea,
-          visibilidad: state.pd2Visibilidad,
-          formato: formatoInput ? formatoInput.value : '',
-          objetivo,
-          audienciaCodigo: item.audienciaCodigo || audienciaCodigo,
-          otraAudiencia: item.audienciaCodigo === 'Otra' ? (item.otraAudienciaTexto || '') : otraAudiencia,
-          refuerzoAudiencia,
-          otrasRefuerzo,
-          material: materialCarrusel || (item.modoMaterial === 'archivo' && item.archivoSubido
-            ? item.archivoSubido.material
-            : (materialInput ? materialInput.value.trim() : '')),
-          materialStories: materialStoriesFinal,
-          post: state.pd2Visibilidad === 'PUBLICO' && item.modoMaterial === 'post' ? item.postSeleccionado : null,
-          copy: copyInput ? copyInput.value.trim() : '',
-          presupuesto,
-          fechaInicio,
-          fechaFin,
-          linkDestino,
-          redes: state.pd2Visibilidad === 'PUBLICO' && item.postSeleccionado
-            ? [item.postSeleccionado.plataforma === 'Instagram' ? 'instagram' : 'facebook']
-            : redesCompartidas,
-          placements: state.pd2Visibilidad === 'PUBLICO' ? [] : state.pd2Placements,
-          // Solo "Crear Anuncios": el reparto que se definió para esta pieza.
-          reparto: hayQueRepartirPiezaV2(i) ? item.reparto : null,
-          comentarios,
-          combosExcluidos: Object.keys(state.pd2CombosExcluidos),
-          bulkId,
-        }),
+        body: JSON.stringify(armarDatosPiezaV2(i, ctx)),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.detalle || data.error);
@@ -3707,8 +3753,22 @@ async function enviarBulkV2() {
     return;
   }
 
+  // El bloqueo de campos (bloquearFormularioV2) asume que lo que se manda a
+  // confirmar es EXACTAMENTE lo que se previsualizó — pero acá ya se sabe
+  // que al menos una pieza falló al confirmar (campos obligatorios, límite
+  // de Meta, lo que sea). Dejar los campos bloqueados le sacaba la única
+  // forma de corregir sin pasar por "Editar" — que además no tenía handler
+  // (ver acción pd2-editar-bloqueo).
+  bloquearFormularioV2(false);
   btn.disabled = false;
   btn.textContent = 'Ver preview';
+}
+
+function editarBloqueoV2() {
+  state.pd2BulkPreviews = null;
+  state.pd2BulkError = null;
+  bloquearFormularioV2(false);
+  renderResultadoBulkV2();
 }
 
 function renderBulkErrorV2() {
@@ -4091,6 +4151,7 @@ document.addEventListener('click', (e) => {
   if (action === 'pd2-confirmar-modulo') { confirmarModuloV2(Number(id)); return; }
   if (action === 'pd2-modo-carga') { cambiarModoCargaV2(id); return; }
   if (action === 'pd2-bulk-crear') { enviarBulkV2(); return; }
+  if (action === 'pd2-editar-bloqueo') { editarBloqueoV2(); return; }
   if (action === 'pd2bulk-modo-material') {
     const idx = Number(el.dataset.index);
     const item = state.pd2BulkItems[idx];
