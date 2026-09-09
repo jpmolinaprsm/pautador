@@ -4228,6 +4228,18 @@ document.addEventListener('change', (e) => {
     // materialEsImagenConocida() en v1, que tampoco lo sabe hasta verificar).
     const formatoInfo = state.pdFormatos.find((f) => f.appsheet_valor === e.target.value);
     state.pd2Placements = state.pd2Placements.filter((p) => placementDisponibleUI(formatoInfo, p, false));
+    // Las piezas ya renderizadas quedan con el editor de Material (link/
+    // archivo suelto vs. una fila por imagen) del Formato con el que se
+    // crearon — si el nuevo Formato es Carrusel, o el anterior lo era, esa
+    // forma cambia por completo y hay que refrescarlo. Para el resto de los
+    // casos (imagen ↔ video) no se toca, para no perder un link ya tipeado.
+    const esCarruselAhora = formatoInfo && formatoInfo.modo === 'carrusel';
+    state.pd2BulkItems.forEach((item, i) => {
+      const wrap = document.getElementById(`pd2bulk${i}-material-wrap`);
+      if (!wrap) return;
+      const eraCarrusel = !!wrap.querySelector('[data-carrusel-link-v2], [data-carrusel-archivo-v2]');
+      if (esCarruselAhora || eraCarrusel) wrap.innerHTML = renderMaterialBulkV2(i);
+    });
     setTimeout(renderTabPedido2, 0);
     return;
   }
