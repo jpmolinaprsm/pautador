@@ -12,8 +12,8 @@ const supabase = require('./db');
 const IMPLS = { google, supabase, mock };
 const impl = IMPLS[env.dataSource] || mock;
 
-async function readTable(sheetName) {
-  return impl.readTable(sheetName);
+async function readTable(sheetName, columnas) {
+  return impl.readTable(sheetName, columnas);
 }
 
 async function appendRow(sheetName, rowValues) {
@@ -47,4 +47,11 @@ async function insertarFila(sheetName, campos) {
   await appendRow(sheetName, header.map((col) => (campos[col] !== undefined ? campos[col] : '')));
 }
 
-module.exports = { readTable, appendRow, updateRow, updateRowWhere, insertarFila };
+// Solo Supabase la implementa (Excel/Sheets no borran filas) — el único
+// uso hoy es reescribir los accesos de un usuario (Panel Usuarios).
+async function deleteRowsWhere(sheetName, criterios) {
+  if (!impl.deleteRowsWhere) throw new Error(`La fuente de datos "${env.dataSource}" no soporta borrar filas.`);
+  return impl.deleteRowsWhere(sheetName, criterios);
+}
+
+module.exports = { readTable, appendRow, updateRow, updateRowWhere, insertarFila, deleteRowsWhere };

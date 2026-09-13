@@ -42,7 +42,14 @@ const COLUMNAS = {
     'audiencia_resuelta', 'plataformas_resueltas', 'optimization_goal', 'modo', 'errores_preview',
     'adset_id', 'creative_id', 'ad_id', 'publicado_en', 'n8n_execution_id', 'error_publicacion',
     'activo_solicitado', 'imagen_preview', 'desestimado_por', 'desestimado_en', 'motivo_desestimacion', 'redes',
-    'material_stories', 'comentarios', 'combos_excluidos',
+    'material_stories', 'comentarios', 'combos_excluidos', 'reparto',
+    'origen', 'tareas_replicado', 'tareas_error',
+    'categoria_pieza', 'gobernador',
+  ],
+  ingesta_sheets: ['hoja', 'fila_id', 'correlation_id', 'estado', 'error', 'procesado_en'],
+  creatividades: [
+    'id', 'storage_path', 'nombre_original', 'content_type', 'bytes', 'width', 'height', 'origen', 'link_original',
+    'proyecto', 'activo_key', 'codigo', 'campana', 'eje', 'correlation_id', 'subido_por', 'creado_en', 'expira_en', 'borrado_en',
   ],
   config_activos: [
     'proyecto', 'activo', 'activo_key', 'activo_habilitado', 'bm_id', 'ad_account_id', 'page_id',
@@ -50,6 +57,7 @@ const COLUMNAS = {
     'presupuesto_piso', 'presupuesto_techo', 'presupuesto_default', 'duracion_dias',
     'authorization_category', 'credential_key', 'colaborador_email', 'slack_channel',
     'asana_project_gid', 'graph_api_version', 'provincia',
+    'cliente', 'ecosistema_historico', 'codigo_proyecto',
   ],
   equiv_audiencia: ['activo_key', 'codigo_audiencia', 'nombre_display', 'tamaño', 'saved_audience_id'],
   equiv_objetivo: [
@@ -67,7 +75,10 @@ const COLUMNAS = {
     'monto_resuelto', 'campaign_id', 'adset_id', 'creative_id', 'ad_id', 'estado_celda', 'confirmado_en', 'nomenclatura',
   ],
   campanas_meta: ['activo_key', 'eje', 'objetivo', 'campaign_id', 'creado_en'],
-  usuarios: ['id', 'nombre', 'rol', 'proyectos', 'email'],
+  usuarios: ['id', 'nombre', 'rol', 'proyectos', 'email', 'es_superadmin', 'habilitado'],
+  usuario_accesos: ['id', 'usuario_id', 'proyecto', 'activo_key', 'creado_en', 'creado_por'],
+  historial_marcas: ['codigo', 'estado', 'marcado_por', 'marcado_en'],
+  proyectos_estado: ['proyecto', 'estado', 'modificado_por', 'modificado_en'],
   escala_presupuestos: ['tamaño', 'intensidad', 'monto'],
 };
 
@@ -88,9 +99,15 @@ function normalizarFila(fila) {
   return out;
 }
 
-async function readTable(sheetName) {
-  const cols = columnasDe(sheetName);
-  const { data, error } = await getClient().from(sheetName).select(cols.join(','));
+// Lee con "*" (todas las columnas reales) en vez de la lista de COLUMNAS:
+// así una columna nueva en el código cuya migración todavía no corrió no
+// tira abajo la lectura entera (pasó con la 004 — todo el pedido se caía).
+// La columna faltante simplemente no viene (undefined → '' → falsy), y el
+// código que la usa la trata como vacía hasta que se corra la migración.
+// `columnas` (opcional) fuerza una lista concreta.
+async function readTable(sheetName, columnas) {
+  columnasDe(sheetName); // sigue exigiendo que la tabla esté declarada
+  const { data, error } = await getClient().from(sheetName).select(columnas ? columnas.join(',') : '*');
   if (error) throw new Error(`Supabase: no pude leer "${sheetName}": ${error.message}`);
   return (data || []).map(normalizarFila);
 }
@@ -147,7 +164,22 @@ async function updateRowWhere(sheetName, criterios, updates) {
   }
 }
 
+// Borra las filas que matchean TODOS los criterios (ej. los accesos de un
+// usuario antes de volver a escribirlos desde el Panel Usuarios). Sin
+// criterios no borra nada — nunca un DELETE de tabla entera por accidente.
+async function deleteRowsWhere(sheetName, criterios) {
+  const entradas = Object.entries(criterios || {});
+  if (!entradas.length) throw new Error(`deleteRowsWhere("${sheetName}") sin criterios — no se borra una tabla entera.`);
+  let query = getClient().from(sheetName).delete();
+  entradas.forEach(([col, val]) => { query = query.eq(col, val); });
+  const { error } = await query;
+  if (error) {
+    const detalle = entradas.map(([c, v]) => `${c}=${v}`).join(', ');
+    throw new Error(`Supabase: no pude borrar en "${sheetName}" (${detalle}): ${error.message}`);
+  }
+}
+
 // COLUMNAS también se exporta para supabase/migrar.js: necesita la misma
 // lista para descartar columnas que están en el Excel (ej. la nota
 // "DÓNDE ENCONTRAR ESTE DATO" de config_activos) pero no en el esquema real.
-module.exports = { readTable, appendRow, insertObjeto, updateRow, updateRowWhere, COLUMNAS };
+module.exports = { readTable, appendRow, insertObjeto, updateRow, updateRowWhere, deleteRowsWhere, COLUMNAS };

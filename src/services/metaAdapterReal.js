@@ -21,6 +21,16 @@ function parseListaSimple(valor) {
   return String(valor || '').toLowerCase().split(',').map((v) => v.trim()).filter(Boolean);
 }
 
+// config_activos todavía tiene placeholders tipo "⚠️ BUSCAR EN BM" para los
+// campos sin completar (ver metaContent.js) — un ig_actor_id real es
+// siempre numérico. Sin esto, un placeholder cuenta como "truthy" y Meta
+// tira "Ad account has no access to this Instagram account" en vez de
+// simplemente no ofrecer Instagram (verificado en vivo contra una cuenta
+// real, 2026-09-11).
+function esIdValido(valor) {
+  return !!valor && /^\d+$/.test(String(valor).trim());
+}
+
 // Placements que se van a usar de verdad: los elegidos a mano en el
 // formulario (pauta.placements) si hay, si no Feed a secas (el Formato ya
 // no tiene un Placement por defecto — ver placementDisponible). UNA sola
@@ -121,11 +131,23 @@ async function buscarOCrearCampania(pauta, objetivo, ctx, nombre) {
     throw new Error(`Objetivo "${objetivo}" no tiene meta_campaign_objective en equiv_objetivo — no se puede crear la campaña.`);
   }
 
+  const esPolitica = ctx.activo.authorization_category === 'POLITICAL';
   const data = await metaApi.graphPost(`/${ctx.activo.ad_account_id}/campaigns`, {
     name: nombre,
     objective: equivObj.meta_campaign_objective,
-    status: 'PAUSED',
-    special_ad_categories: ctx.activo.authorization_category === 'POLITICAL' ? ['ISSUES_ELECTIONS_POLITICS'] : [],
+    // Siempre PAUSED, salvo la ingesta automática cuando el usuario decida
+    // pasarla a ACTIVE (INGESTA_ESTADO_INICIAL, ver confirmar.js) — ningún
+    // pedido cargado a mano puede salir activo.
+    status: ctx.estadoInicial || 'PAUSED',
+    special_ad_categories: esPolitica ? ['ISSUES_ELECTIONS_POLITICS'] : [],
+    // Sin esto, Meta lo completa solo con su propio default (EE.UU.) en vez
+    // de inferirlo de la cuenta/página — la autorización política que se
+    // configura en Business Manager es POR PAÍS, así que una campaña que
+    // queda con el país por defecto (US) rechaza igual aunque la cuenta
+    // esté autorizada para Argentina (verificado en vivo: 2026-09-11, el
+    // mismo error "no autorizado" que tira Meta cuando el país SÍ está mal,
+    // no cuando falta autorización de verdad).
+    ...(esPolitica ? { special_ad_category_country: ['AR'] } : {}),
     // El presupuesto vive en cada Adset (una porción por celda de la matriz),
     // no en la campaña — por eso el compartido entre adsets (CBO) va apagado.
     is_adset_budget_sharing_enabled: false,
@@ -241,7 +263,7 @@ async function crearCreative(pauta, ctx, postIdOverride) {
       page_id: ctx.activo.page_id,
       link_data: { message: pauta.copy || '', link: linkCarrusel, child_attachments: childAttachments },
     };
-    if (ctx.activo.ig_actor_id) objectStorySpecCarrusel.instagram_actor_id = ctx.activo.ig_actor_id;
+    if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpecCarrusel.instagram_actor_id = ctx.activo.ig_actor_id;
     creativePayload = { object_story_spec: objectStorySpecCarrusel };
   } else {
     // Material nuevo (Oculto/Dark): se sube el archivo y se arma el creative
@@ -315,7 +337,7 @@ async function crearCreative(pauta, ctx, postIdOverride) {
         throw new Error(`El material de Stories no tiene proporción 9:16 (vertical) — mide ${materialStories.width}×${materialStories.height}px.`);
       }
 
-      const plataformasSpec = ['facebook', ctx.activo.ig_actor_id && 'instagram'].filter(Boolean);
+      const plataformasSpec = ['facebook', esIdValido(ctx.activo.ig_actor_id) && 'instagram'].filter(Boolean);
       const assetFeedSpec = {
         images: [
           { hash: material.imageHash, adlabels: [{ name: 'imagen_principal' }] },
@@ -329,7 +351,7 @@ async function crearCreative(pauta, ctx, postIdOverride) {
             customization_spec: {
               publisher_platforms: plataformasSpec,
               facebook_positions: ['story'],
-              ...(ctx.activo.ig_actor_id ? { instagram_positions: ['story'] } : {}),
+              ...(esIdValido(ctx.activo.ig_actor_id) ? { instagram_positions: ['story'] } : {}),
             },
             image_label: { name: 'imagen_stories' },
             body_label: { name: 'texto' },
@@ -346,7 +368,7 @@ async function crearCreative(pauta, ctx, postIdOverride) {
         ],
       };
       const objectStorySpecDual = { page_id: ctx.activo.page_id };
-      if (ctx.activo.ig_actor_id) objectStorySpecDual.instagram_actor_id = ctx.activo.ig_actor_id;
+      if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpecDual.instagram_actor_id = ctx.activo.ig_actor_id;
       creativePayload = { object_story_spec: objectStorySpecDual, asset_feed_spec: assetFeedSpec };
     } else {
       let contenidoSpec;
@@ -368,13 +390,21 @@ async function crearCreative(pauta, ctx, postIdOverride) {
       }
 
       const objectStorySpec = { page_id: ctx.activo.page_id, ...contenidoSpec };
-      if (ctx.activo.ig_actor_id) objectStorySpec.instagram_actor_id = ctx.activo.ig_actor_id;
+      if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpec.instagram_actor_id = ctx.activo.ig_actor_id;
       creativePayload = { object_story_spec: objectStorySpec };
     }
   }
 
+  // El marcador de "contenido político" Meta lo lee del CREATIVE, no del Ad:
+  // en una campaña ISSUES_ELECTIONS_POLITICS, un creative sin esto hace que
+  // el POST /ads falle con "No puedes marcar como no político el contenido
+  // que forma parte de una campaña política" (subcode 2446466) — sin importar
+  // qué authorization_category lleve el Ad (verificado en vivo 2026-09-11:
+  // POLITICAL/NONE/ausente en el Ad, siempre el mismo rechazo; con el
+  // creative marcado, el Ad se crea).
   const creative = await metaApi.graphPost(`/${ctx.activo.ad_account_id}/adcreatives`, {
     name: `${nombre} - creative`,
+    ...(ctx.activo.authorization_category ? { authorization_category: ctx.activo.authorization_category } : {}),
     ...creativePayload,
   });
   return creative.id;
@@ -404,7 +434,7 @@ async function crearAdsetYAd(pauta, celda, monto, campaignId, ctx, creativeId) {
   // siempre, Instagram solo si el activo tiene cuenta conectada.
   const redesElegidas = parseListaSimple(pauta.redes);
   const tienePlacementFb = redesElegidas.length ? redesElegidas.includes('facebook') : true;
-  const tienePlacementIg = redesElegidas.length ? redesElegidas.includes('instagram') : !!ctx.activo.ig_actor_id;
+  const tienePlacementIg = redesElegidas.length ? redesElegidas.includes('instagram') : esIdValido(ctx.activo.ig_actor_id);
 
   // Placement: Feed, Stories, Reels — multipick (pauta.placements). Sin
   // elección explícita cae en Feed (ver placementsEfectivos()). Nada de
@@ -462,7 +492,7 @@ async function crearAdsetYAd(pauta, celda, monto, campaignId, ctx, creativeId) {
     lifetime_budget: Math.round(monto * 100),
     start_time: fechaISO(inicio, false),
     targeting,
-    status: 'PAUSED',
+    status: ctx.estadoInicial || 'PAUSED',
     // Meta exige saber qué se promociona (la Página) para objetivos tipo
     // engagement/awareness — sin esto, el Ad final se rechaza.
     promoted_object: { page_id: ctx.activo.page_id },
@@ -515,7 +545,7 @@ async function crearAdsetYAd(pauta, celda, monto, campaignId, ctx, creativeId) {
       name: nombre,
       adset_id: adsetId,
       creative: { creative_id: creativeId },
-      status: 'PAUSED',
+      status: ctx.estadoInicial || 'PAUSED',
     };
     if (ctx.activo.authorization_category) adPayload.authorization_category = ctx.activo.authorization_category;
     const ad = await metaApi.graphPost(`/${ctx.activo.ad_account_id}/ads`, adPayload);

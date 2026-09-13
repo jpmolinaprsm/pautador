@@ -26,13 +26,20 @@ function parseListaSimple(valor) {
   return String(valor).split(',').map((v) => v.trim()).filter(Boolean);
 }
 
+// config_activos todavía tiene placeholders tipo "⚠️ BUSCAR EN BM" para los
+// campos sin completar — un id real de Meta es siempre numérico (mismo
+// chequeo que metaAdapterReal.js/confirmar.js).
+function esIdValido(valor) {
+  return !!valor && /^\d+$/.test(String(valor).trim());
+}
+
 // "FB", "IG" o "FB/IG" según la Red elegida a mano (pauta.redes) o, sin
 // elección explícita, el mismo fallback que usa el targeting real: Facebook
 // siempre, Instagram solo si el activo tiene la cuenta conectada.
 function etiquetaRed(pauta, activo) {
   const redesElegidas = parseListaSimple(pauta.redes);
   const tieneFb = redesElegidas.length ? redesElegidas.includes('facebook') : true;
-  const tieneIg = redesElegidas.length ? redesElegidas.includes('instagram') : !!(activo && activo.ig_actor_id);
+  const tieneIg = redesElegidas.length ? redesElegidas.includes('instagram') : !!(activo && esIdValido(activo.ig_actor_id));
   if (tieneFb && tieneIg) return 'FB/IG';
   if (tieneIg) return 'IG';
   return 'FB';
@@ -57,7 +64,10 @@ function etiquetaPlacement(pauta) {
 // Instagram solo.
 function nomenclaturaAdset(pauta, celda, activo) {
   const contenido = pauta.contenido || `${pauta.campana} (${pauta.formato})`;
-  const ubicacion = `${etiquetaRed(pauta, activo)} ${etiquetaPlacement(pauta)}`;
+  // Otra plataforma (Pedido Normal: Youtube/Tik Tok/X/Display) no tiene
+  // Red ni Placement de Meta — la ubicación es la plataforma misma.
+  const esMeta = !pauta.plataforma || pauta.plataforma === 'Meta';
+  const ubicacion = esMeta ? `${etiquetaRed(pauta, activo)} ${etiquetaPlacement(pauta)}` : pauta.plataforma;
   return `${pauta.codigo} - ${celda.audiencia.nombre} - ${pauta.eje} - ${contenido} - ${ubicacion} - ${celda.objetivo} - C/D`;
 }
 

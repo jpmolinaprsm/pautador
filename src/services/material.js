@@ -13,6 +13,19 @@
 const fs = require('fs');
 const path = require('path');
 
+// Un material "local" es una ruta relativa a la raíz del proyecto (la
+// carpeta que contiene pautador/, Tablas/, uploads/). Se normaliza y se
+// exige que quede ADENTRO de esa raíz — "../../etc/passwd" o una ruta
+// absoluta no pueden salir de ahí (path traversal).
+const RAIZ_MATERIALES = path.resolve(__dirname, '..', '..', '..');
+function rutaLocalSegura(relativa) {
+  const abs = path.resolve(RAIZ_MATERIALES, String(relativa || ''));
+  if (abs !== RAIZ_MATERIALES && !abs.startsWith(RAIZ_MATERIALES + path.sep)) {
+    throw new Error(`La ruta "${relativa}" sale de la carpeta de materiales — no se permite.`);
+  }
+  return abs;
+}
+
 // Cuánto esperamos a que el origen responda. Sin esto, un link colgado deja
 // colgado el pedido entero.
 const TIMEOUT_MS = 20000;
@@ -118,6 +131,9 @@ function contentTypeEfectivo(contentType, url) {
   return MIME_POR_EXTENSION[ext] || contentType;
 }
 
+// Creatividades en Supabase Storage ("creatividad:<id>") — ver storage.js.
+const storage = require('./storage');
+
 // Qué es el material sale del Content-Type real, no del Formato que eligió
 // el usuario. MISMO criterio que usa metaMedia al subir: sin Content-Type se
 // asume imagen (Meta la acepta igual) — si acá fuéramos más estrictos que
@@ -130,11 +146,17 @@ function clasificar(contentType) {
 
 // Resuelve el material a bytes listos para subir a Meta.
 async function resolverBytes(material) {
+  // "creatividad:<id>" — archivo en el bucket privado de Supabase (ver
+  // storage.js). Se baja a buffer y sigue el mismo camino que un archivo
+  // local: Meta no distingue de dónde vino.
+  if (storage.esReferencia(material)) {
+    return storage.descargarCreatividad(storage.idDeReferencia(material));
+  }
   const pareceUrl = /^https?:\/\//i.test(material);
   if (!pareceUrl) {
     // Ruta local, relativa a la raíz del proyecto (donde vive esta carpeta
     // pautador/ al lado de Tablas/, Foto.jpg, etc.)
-    const localPath = path.resolve(__dirname, '..', '..', '..', material);
+    const localPath = rutaLocalSegura(material);
     if (!fs.existsSync(localPath)) {
       throw new Error(`No encontré el archivo local "${material}" (busqué en ${localPath})`);
     }
@@ -176,13 +198,24 @@ async function verificarMaterial(material) {
   const texto = String(material || '').trim();
   if (!texto) throw new Error('Falta el link del material.');
 
+  // "creatividad:<id>" — ya está en el bucket, se chequea que exista y no
+  // haya vencido; el preview sale con URL firmada (1 h).
+  if (storage.esReferencia(texto)) {
+    const c = await storage.getCreatividad(storage.idDeReferencia(texto));
+    if (!c) throw new Error(`No existe la creatividad "${texto}" — volvé a subir el archivo.`);
+    if (c.borrado_en) throw new Error(`Ese archivo venció (${String(c.expira_en).slice(0, 10)}) y ya se borró — volvé a subirlo.`);
+    const tipo = clasificar(c.content_type || '');
+    if (!tipo) throw new Error(`El archivo no es una imagen ni un video (es "${c.content_type}").`);
+    return { tipo, contentType: c.content_type, bytes: Number(c.bytes) || 0, previewUrl: await storage.urlFirmada(c.storage_path), width: c.width || null, height: c.height || null };
+  }
+
   if (/drive\.google\.com\/drive\/folders/i.test(texto)) {
     throw new Error('Ese link es una CARPETA de Drive, no un archivo. Abrí el archivo que va a la pauta y copiá el link de ahí.');
   }
 
   const pareceUrl = /^https?:\/\//i.test(texto);
   if (!pareceUrl) {
-    const localPath = path.resolve(__dirname, '..', '..', '..', texto);
+    const localPath = rutaLocalSegura(texto);
     if (!fs.existsSync(localPath)) {
       throw new Error(`"${texto}" no es un link (no empieza con http) ni un archivo que exista en el servidor.`);
     }

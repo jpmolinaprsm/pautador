@@ -9,8 +9,14 @@ const env = {
   dataSource: process.env.DATA_SOURCE || 'mock', // 'mock' (Excel local), 'google' (Sheets real) o 'supabase' (Postgres real)
   mockDataDir: process.env.MOCK_DATA_DIR || '../Tablas',
   sheetId: process.env.GOOGLE_SHEET_ID || '',
-  credentialsPath:
+  // Ruta de la clave de la Service Account. Si viene relativa, se resuelve
+  // contra la carpeta pautador/ (no contra process.cwd()): el server puede
+  // arrancar desde otro directorio (launch.json del panel, Railway) y con
+  // la ruta relativa no encontraba la clave — sin hoja de códigos ni Tareas.
+  credentialsPath: require('path').resolve(
+    __dirname, '..', '..',
     process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || './credentials/service-account.json',
+  ),
 
   // DATA_SOURCE=supabase — service_role (NUNCA la anon key: este server
   // necesita saltarse Row Level Security para leer/escribir todas las
@@ -27,6 +33,10 @@ const env = {
   // Solo entran mails de este dominio (login con Google, ver routes/auth.js
   // y services/usuarios.js resolverUsuarioValidado).
   authDominio: (process.env.AUTH_DOMINIO || 'prosumia.la').toLowerCase(),
+  // 1 (default, "por ahora" — pedido del usuario 2026-09-11): cualquier mail
+  // del dominio entra solo, sin accesos, hasta que un admin se los asigne
+  // en Panel Usuarios. 0: solo entra quien un admin dio de alta antes.
+  authAltaLibre: process.env.AUTH_ALTA_LIBRE !== '0',
 
   // OAuth Client "web" de Google Cloud Console. Si GOOGLE_CLIENT_ID no está
   // seteado, el login con Google queda deshabilitado y la pantalla de Login
@@ -35,6 +45,62 @@ const env = {
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
   googleRedirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback',
+
+  // --- Ingesta de las hojas salida_manual_* (punto 3 del plan) ---
+  // Spreadsheet con las 3 hojas (chaco/catamarca/chubut). Lo lee el polling
+  // (si hay Service Account) y lo cruza el webhook para no aceptar filas de
+  // cualquier planilla.
+  ingestaSheetId: process.env.INGESTA_SHEET_ID || '',
+  // Secreto que tiene que mandar el Apps Script en el header x-ingesta-secret.
+  ingestaSecret: process.env.INGESTA_SECRET || '',
+  // Cada cuántos minutos revisa las hojas solo. 0 = apagado (solo webhook /
+  // botón). Necesita la Service Account (GOOGLE_SERVICE_ACCOUNT_KEY_PATH).
+  ingestaMinutos: Number(process.env.INGESTA_MINUTOS || 0),
+  // Una fila con Fecha más vieja que esto no se pauta (freno para la primera
+  // pasada / historial del Sheet). 0 = sin freno.
+  ingestaMaxDias: Number(process.env.INGESTA_MAX_DIAS === undefined ? 2 : process.env.INGESTA_MAX_DIAS),
+  // Estado con el que la ingesta crea campaña/adset/ad en Meta. PAUSED por
+  // defecto; ACTIVE = gasto real inmediato — se cambia solo a pedido del
+  // usuario. Ningún otro origen (pedido/csv) lo usa.
+  ingestaEstadoInicial: (process.env.INGESTA_ESTADO_INICIAL || 'PAUSED').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
+
+  // --- Creatividades en Supabase Storage (punto 5 del plan) ---
+  // Apagado hasta correr migration_006 (tabla creatividades): con 0 los
+  // archivos siguen yendo a ../uploads como siempre.
+  creatividadesStorage: String(process.env.CREATIVIDADES_STORAGE || '0') === '1',
+  creatividadesBucket: process.env.CREATIVIDADES_BUCKET || 'creatividades',
+  creatividadesDias: Number(process.env.CREATIVIDADES_DIAS || 90),
+
+  // --- Hoja "Tareas" (Make → Asana), reemplazo del script de AppSheet ---
+  tareasSheetId: process.env.TAREAS_SHEET_ID || '',
+  tareasHoja: process.env.TAREAS_HOJA || 'Tareas',
+
+  // --- Hoja "CodigosContenido" de AppSheet (se mezcla con el histórico en
+  // BigQuery). Mientras la lista de contenidos no esté migrada a Supabase:
+  // el generador de códigos sigue la secuencia de lo que hay ahí, y cada
+  // pedido nuevo se inserta como una fila más (ver services/codigosSheet.js).
+  codigosSheetId: process.env.CODIGOS_SHEET_ID || '',
+  codigosHoja: process.env.CODIGOS_HOJA || 'CodigosContenido',
+  // Un proyecto sin ningún código en esa hoja desde esta fecha (ISO) no se
+  // muestra para elegir (pedido del usuario 2026-09-11: "desde el 15 de
+  // agosto"). Vacío = se muestran todos.
+  proyectosActividadDesde: process.env.PROYECTOS_ACTIVIDAD_DESDE || '',
+  // Ventana móvil (días): un proyecto sin códigos en ese lapso no se ofrece
+  // salvo que un admin lo active ("un mes y medio", usuario 2026-09-12).
+  // Si está seteado, pisa a PROYECTOS_ACTIVIDAD_DESDE. 0 = sin regla.
+  proyectosInactividadDias: Number(process.env.PROYECTOS_INACTIVIDAD_DIAS || 0),
+  // Clientes que por ahora no se ofrecen (todos sus proyectos), separados
+  // por coma. "Córdoba por ahora afuera, va a tener un módulo especial la
+  // semana que viene" (usuario, 2026-09-11). Vacío = ninguno oculto.
+  clientesOcultos: String(process.env.CLIENTES_OCULTOS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  // Clientes habilitados SOLO para el canal Informativo (todos sus
+  // proyectos): "Córdoba solo habilitado para informativo con leyenda que
+  // lo avise" (usuario, 2026-09-12) — Oficial va a tener su módulo aparte.
+  clientesSoloInformativo: String(process.env.CLIENTES_SOLO_INFORMATIVO || '').split(',').map((s) => s.trim()).filter(Boolean),
+  // Desde qué fecha (ISO) se muestra el Historial que sale de la hoja
+  // CodigosContenido. "Empecemos con solo septiembre y después con BQ
+  // ponemos todo" (usuario, 2026-09-12).
+  historialDesde: process.env.HISTORIAL_DESDE || '2026-09-01',
 };
 
 if (env.dataSource === 'google' && !env.sheetId) {

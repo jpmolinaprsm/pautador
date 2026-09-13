@@ -36,7 +36,7 @@ function haceCuanto(fechaStr, id) {
 // Orden fijo pedido por el usuario para el desplegable de Objetivo — no es
 // el orden de equiv_objetivo en la base. Lo que no esté en esta lista (ej.
 // un objetivo nuevo que se cargue después) queda al final, sin romper nada.
-const ORDEN_OBJETIVOS = ['Alcance Normal', 'Interacción', 'Alcance con presencia', 'Impresiones', 'Views', 'Tráfico', 'Conversión'];
+const ORDEN_OBJETIVOS = ['Alcance', 'Interacción', 'Impresiones', 'Views', 'Tráfico', 'Conversión'];
 function ordenarObjetivos(lista) {
   return [...lista].sort((a, b) => {
     const ia = ORDEN_OBJETIVOS.indexOf(a);
@@ -84,7 +84,12 @@ const state = {
   batchDesestimarAbierto: false,
   batchDesestimarEnviando: false,
   batchDesestimarError: null,
-  historyOpen: false,
+  // Abierto por default: sin audiencia manual ni Validación intermedia
+  // (MVP), "Pendientes" queda vacío por construcción — si el historial
+  // arrancara plegado, la pantalla se vería vacía sin motivo aparente.
+  historyOpen: true,
+  // Historial desde la hoja CodigosContenido (ver renderHistorialSheet).
+  historial: { filas: [], cargado: false, cargando: false, error: null, desde: '', sinHoja: false, busqueda: '', activo: '', expandido: null, marcando: null },
   toast: null,
   cargando: true,
   error: null,
@@ -101,8 +106,14 @@ const state = {
   // validar contra lo que el usuario realmente puede ver.
   proyectoActivo: localStorage.getItem('pautador_proyecto_activo') || null,
   ecosistemaActivo: localStorage.getItem('pautador_ecosistema_activo') || null,
+  modoActivo: localStorage.getItem('pautador_modo_activo') || null,
   proyectosDisponibles: [],
   pendientesPorProyecto: {},
+  // Una entrada por pieza pendiente ({proyecto, modo, ecosistema,
+  // plataformas}) — alimenta los globos de TODAS las pantallas del
+  // onboarding (Proyecto → Modo → Ecosistema → Plataforma).
+  pendientesDetalle: [],
+  pendientesDetalleCargado: false,
   // El desplegable Proyecto de "Pedido de Pauta" queda fijo al elegido acá
   // arriba, salvo que el Admin haya elegido "Ver todos los proyectos".
   proyectosDisponiblesBloqueado: true,
@@ -118,6 +129,17 @@ const state = {
   pdFormatos: [],
   pdObjetivos: [],
   pdAudiencias: [],
+  // Plataformas del Pedido Normal (GET /api/plataformas) y la elegida en
+  // Módulo 1 — en automatizado solo viene Meta y el selector no se muestra.
+  pdPlataformas: [],
+  // Plataformas elegidas en la cuadrícula (multipick) al entrar a "Pedido
+  // de Anuncios"; hasta que se confirma (pd2PlataformaElegida) no se
+  // muestran los módulos.
+  pd2Plataformas: ['Meta'],
+  pd2PlataformaElegida: false,
+  // [{proyecto, cliente}] de GET /api/proyectos?detalle=1 — la pantalla de
+  // Proyecto los agrupa por cliente y el nav muestra "Cliente · Proyecto".
+  proyectosDetalle: [],
   // Mínimo de presupuesto que exige Meta en la cuenta donde se ejecuta
   // (minDiario × días × conjuntos). 0 = no se pudo leer, no se avisa nada.
   limites: { minDiario: 0, moneda: '' },
@@ -136,10 +158,22 @@ const state = {
   pd2Proyecto: null, pd2ActivoKey: null, pd2TipoCodigo: 'D', pd2EjeCodigo: null,
   pd2CampanasSugeridas: [],
   pd2Objetivo: [], pd2AudienciaCodigo: '', pd2Refuerzo: [],
-  // Cruces Objetivo|Audiencia que el PM desactivó antes de pedir — ver
-  // renderCrucesV2. Vive fuera de pd2BulkItems porque Objetivo/Audiencia
-  // son compartidos por todas las piezas del pedido, no por pieza.
+  // Cruces Objetivo|Audiencia que el PM desactivó antes de pedir, y cómo se
+  // reparte el % de inversión entre los que quedan — ver renderCrucesV2.
+  // Viven fuera de pd2BulkItems porque Objetivo/Audiencia son compartidos
+  // por todas las piezas del pedido, no por pieza. Mismo motor que el
+  // reparto de "Crear Anuncios" bulk (repartoParejo/repartoConExclusionesV2/
+  // repartoTrasMoverSliderV2 en vez de duplicar la lógica).
   pd2CombosExcluidos: {},
+  pd2RepartoObjetivo: null,
+  pd2RepartoAud: {},
+  pd2RepartoFirma: null,
+  // Presupuesto total resuelto por el servidor (Tipo × tamaño de Audiencia)
+  // — en "Pedido de Pauta" nunca se elige a mano, así que el panel de
+  // reparto lo pide solo para mostrar montos en pesos (ver
+  // actualizarPresupuestoPreviewPd2). null = todavía no se pudo calcular
+  // (por eso el panel muestra solo % en ese caso, no $).
+  pd2PresupuestoPreview: null,
   pd2Visibilidad: 'DARK', pd2Redes: ['facebook', 'instagram'], pd2Placements: [],
   pd2Posts: [], pd2CargandoPosts: false,
   // Piezas del pedido — SIEMPRE al menos 1 (ver ajustarCantidadPiezasV2),
@@ -174,6 +208,22 @@ const state = {
   admAudExito: null,
   admAudEnviando: false,
 
+  // ---- pestaña "Panel Usuarios" (solo administradores) ----
+  // usuDatos: respuesta de GET /api/admin/usuarios ({usuarios, proyectos,
+  // roles, yo}). usuEdit: copia de trabajo del usuario seleccionado —
+  // accesos como Set de "proyecto|activo_key" ("proyecto|" = todo el
+  // proyecto) hasta que se aprieta Guardar.
+  usuDatos: null,
+  usuCargando: false,
+  usuSelId: null,
+  usuEdit: null,
+  usuError: null,
+  usuExito: null,
+  usuNuevoError: null,
+  usuGuardando: false,
+  usuProyectos: [],
+  usuProyectoCambiando: null,
+
 };
 
 function apiFetch(url, opts = {}) {
@@ -181,6 +231,7 @@ function apiFetch(url, opts = {}) {
     'x-pautador-usuario': state.usuarioActualId || '',
     'x-pautador-proyecto': state.proyectoActivo || '',
     'x-pautador-ecosistema': state.ecosistemaActivo || '',
+    'x-pautador-modo': state.modoActivo || '',
   });
   return window.fetch(url, Object.assign({}, opts, { headers }));
 }
@@ -200,10 +251,23 @@ function proyectosPermitidos() {
 // Qué pestañas puede ver cada rol — administrador es superusuario (ve todo),
 // el resto solo lo suyo (ver mensaje del usuario: "un rol no puede ver las
 // pestañas a las que no tiene acceso").
+// "crear" (Crear Anuncios) quedó redundante con "pedido2" (Pedido de
+// Anuncios) una vez que ambos modos (Automatizado/Normal, ver la pantalla
+// de onboarding) publican en Meta en el mismo request sin instancia de
+// Validación — las dos pestañas hacían lo mismo con distinta pantalla. El
+// Implementador pasa a usar "pedido2" igual que PM/Cuentas (mismo
+// presupuesto automático por escala, ya no lo tipea a mano) y arranca en
+// "pendientes" (Historial: ahí están sus tareas — piezas manuales para
+// cargar y marcar hechas). administrador conserva "crear" por si hace
+// falta el camino de presupuesto manual para algún caso puntual.
 const TABS_POR_ROL = {
   pm_cuentas: ['pedido2', 'pendientes'],
-  implementador: ['pendientes', 'crear'],
-  administrador: ['pedido2', 'pendientes', 'crear', 'admin'],
+  implementador: ['pendientes', 'pedido2'],
+  // "Crear Anuncios" (publicar directo con presupuesto a mano) se sacó el
+  // 2026-09-12: era redundante — Pedido Automatizado ya publica directo y
+  // el presupuesto se cambia desde Historial. state.pd2ModoDirecto queda
+  // siempre en false.
+  administrador: ['pedido2', 'pendientes', 'admin', 'usuarios'],
 };
 
 function tabsPermitidas() {
@@ -235,7 +299,7 @@ async function cargarItems() {
   state.cargando = true;
   render();
   try {
-    const r = await apiFetch('/api/items');
+    const [r] = await Promise.all([apiFetch('/api/items'), cargarHistorialSheet()]);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detalle || data.error || 'Error desconocido');
     state.items = data;
@@ -477,11 +541,14 @@ async function devolverConMotivo(id) {
 // puede hacer falta desde "Validación de Anuncios" directo (un
 // Implementador no tiene la pestaña "Pedido de Pauta" — ver TABS_POR_ROL),
 // así que el panel de edición no puede asumir que ya están cargados.
-async function asegurarDatosReferencia() {
+// activoKey: el de la pauta que se está por editar (audiencias son por
+// activo, no hay una lista fija) — sin eso, no se piden audiencias acá,
+// quien llame ya las tendrá si hace falta (ej. Módulo 1 de Pedido de Anuncios).
+async function asegurarDatosReferencia(activoKey) {
   const tareas = [];
   if (!state.pdFormatos.length) tareas.push(apiFetch('/api/formatos').then((r) => (r.ok ? r.json() : [])).then((d) => { state.pdFormatos = d; }));
   if (!state.pdObjetivos.length) tareas.push(apiFetch('/api/objetivos').then((r) => (r.ok ? r.json() : [])).then((d) => { state.pdObjetivos = ordenarObjetivos(d); }));
-  if (!state.pdAudiencias.length) tareas.push(apiFetch('/api/audiencias?activo_key=test--tres-empanadas').then((r) => (r.ok ? r.json() : [])).then((d) => { state.pdAudiencias = d; }));
+  if (activoKey) tareas.push(cargarAudienciasPorActivo(activoKey));
   if (tareas.length) await Promise.all(tareas);
 }
 
@@ -500,12 +567,12 @@ async function abrirEditar(id) {
   state.editarError = null;
   state.editarCampos = null;
   render();
-  await asegurarDatosReferencia();
   try {
     const r = await apiFetch('/api/pauta/' + encodeURIComponent(id));
     const data = await r.json();
     if (!r.ok) throw new Error(data.detalle || data.error || 'No se pudo cargar la pieza');
     const p = data.pauta;
+    await asegurarDatosReferencia(p.activo);
     const itemLista = state.items.find((it) => it.correlation_id === id);
     state.editarCampos = {
       codigo: p.codigo || '',
@@ -817,7 +884,7 @@ function buildVM(item) {
   // misma tanda (Módulo 5, "Cantidad de piezas" > 1 — ver enviarBulkV2).
   const tags = [];
   if (celdasAuto.length) tags.push({ label: `${celdasAuto.length} conjunto${celdasAuto.length > 1 ? 's' : ''}`, clase: 'tag tag-accent' });
-  if (hayManual) tags.push({ label: 'Hacer Manual', clase: 'tag tag-outline' });
+  if (hayManual) tags.push({ label: 'A mano', clase: 'tag tag-outline' });
   if (item.bulk_id) {
     const grupo = state.items.filter((it) => it.bulk_id === item.bulk_id).length;
     if (grupo > 1) tags.push({ label: `Bulk (${grupo})`, clase: 'tag tag-outline' });
@@ -867,12 +934,15 @@ function buildVM(item) {
       isManual: c.manual, isAuto: !c.manual,
       nomenclatura: c.nomenclatura || '',
       ids: c.manual ? '' : [c.campaign_id, c.adset_id, c.ad_id].filter(Boolean).join(' · '),
+      adId: c.manual ? '' : (c.ad_id || ''),
+      adsetId: c.manual ? '' : (c.adset_id || ''),
     }));
   }
 
   return {
-    id: item.correlation_id, codigo: item.codigo, activoNombre: item.activo_nombre, activo: item.activo, proyecto: item.proyecto,
+    id: item.correlation_id, codigo: item.codigo, activoNombre: item.activo_nombre, activo: item.activo, proyecto: item.proyecto, adAccountId: item.ad_account_id || '',
     isDark: item.visibilidad === 'DARK', fecha: item.fecha, campana: item.campana, contenido: item.contenido, eje: item.eje, formato: item.formato,
+    linkDestino: item.link_destino || '',
     // Columnas "Inicio"/"Fin"/"Pendiente" de la tabla de Validación.
     fechaInicio: item.fecha_inicio || '', fechaFin: item.fecha_fin || '',
     pendienteLabel: haceCuanto(item.fecha, item.correlation_id),
@@ -894,7 +964,7 @@ function buildVM(item) {
     // (ver resolverPresupuestoPorTipo), pero para explicar conviene ver
     // las demás igual.
     audienciasConTamano: item.audiencias.filter((a) => a.tamano).map((a) => ({ nombre: a.nombre, tamano: a.tamano })),
-    tags, estadoLabel: isConfirmed ? 'Confirmada' : (isManualDone ? 'Hecha a mano' : (isDesestimada ? 'Desestimada' : (isDevueltaPm ? 'Devuelta para corrección' : (isPendienteManual ? 'Falta celda manual' : 'Pendiente')))),
+    tags, estadoLabel: isConfirmed ? 'Confirmada' : (isManualDone ? 'Hecha a mano' : (isDesestimada ? 'Desestimada' : (isDevueltaPm ? 'Devuelta para corrección' : (isPendienteManual ? 'Cargar a mano' : 'Pendiente')))),
     isExpanded, chevronClass: 'ph ' + (isExpanded ? 'ph-caret-down' : 'ph-caret-right'),
     selectable: item.estado === 'pendiente' && !isManualOnly && !isDesestimada && puedeEditarValidacion(),
     isSelected: !!state.selected[item.correlation_id],
@@ -960,7 +1030,7 @@ function splitVMSiMixto(vm) {
   };
 
   const tagsAuto = [{ label: `${comboAuto.length} conjunto${comboAuto.length > 1 ? 's' : ''}`, clase: 'tag tag-accent' }].concat(bulkTag ? [bulkTag] : []);
-  const tagsManual = [{ label: 'Hacer Manual', clase: 'tag tag-outline' }].concat(bulkTag ? [bulkTag] : []);
+  const tagsManual = [{ label: 'A mano', clase: 'tag tag-outline' }].concat(bulkTag ? [bulkTag] : []);
 
   return [
     parte('auto', comboAuto, tagsAuto, 'auto'),
@@ -1162,7 +1232,7 @@ function renderCarriles(vm, confirmando) {
     bloqueAuto = `
       <div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          ${titulo('Automático', `${auto.length} conjunto(s) — los publica PAUTADOR`)}
+          ${titulo('Automático', `${auto.length} combinación(es) objetivo × audiencia — las publica PAUTADOR`)}
           ${yaPublicado ? '' : `<button class="btn btn-secondary" style="font-size:12px;padding:4px 10px" data-action="distribute-even" data-id="${vm.id}"><i class="ph ph-equals"></i>Repartir parejo</button>`}
         </div>
         ${mismaPublicacionCheck}
@@ -1172,11 +1242,11 @@ function renderCarriles(vm, confirmando) {
         ${avisoMinimo(vm)}
         ${yaPublicado ? '' : `
           <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
-            <div style="font-size:14px;font-family:var(--font-heading)">Este carril: ${subtotal(auto)}</div>
+            <div style="font-size:14px;font-family:var(--font-heading)">Subtotal: ${subtotal(auto)}</div>
             <button class="btn btn-primary" ${(vm.confirmDisabled || confirmando) ? 'disabled' : ''} data-action="confirm-one" data-id="${vm.id}">${confirmando ? '<span class="spinner-inline"></span>Publicando…' : 'Confirmar y publicar'}</button>
           </div>
-          ${vm.confirmDisabled ? `<div style="font-size:12px;color:var(--color-neutral-400);margin-top:6px">El reparto de los dos carriles tiene que sumar 100% — hoy suma ${vm.totalLabel}.</div>` : ''}
-          ${confirmando ? `<div style="font-size:12px;color:var(--color-neutral-500);text-align:right;margin-top:6px">Publicando ${auto.length} conjunto(s) en Meta — puede tardar unos segundos, no hace falta reintentar.</div>` : ''}`}
+          ${vm.confirmDisabled ? `<div style="font-size:12px;color:var(--color-neutral-400);margin-top:6px">El reparto (automático + a mano) tiene que sumar 100% — hoy suma ${vm.totalLabel}.</div>` : ''}
+          ${confirmando ? `<div style="font-size:12px;color:var(--color-neutral-500);text-align:right;margin-top:6px">Publicando ${auto.length} combinación(es) en Meta — puede tardar unos segundos, no hace falta reintentar.</div>` : ''}`}
       </div>`;
   }
 
@@ -1186,12 +1256,12 @@ function renderCarriles(vm, confirmando) {
     const marcandoTodo = state.accionEnCurso[`${vm.id}|__todo_manual`] === 'celda';
     bloqueManual = `
       <div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-top:12px">
-        <div style="margin-bottom:8px">${titulo('Manual', `${manual.length} conjunto(s) — los cargás vos en Meta${pendientes ? '' : ' · todo marcado'}`)}</div>
+        <div style="margin-bottom:8px">${titulo('A mano', `${manual.length} combinación(es) objetivo × audiencia — las cargás vos en la plataforma${pendientes ? '' : ' · todo marcado'}`)}</div>
         <div style="display:flex;flex-direction:column;gap:8px">
           ${manual.map((c) => renderCombo(vm, c)).join('')}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
-          <div style="font-size:14px;font-family:var(--font-heading)">Este carril: ${subtotal(manual)}</div>
+          <div style="font-size:14px;font-family:var(--font-heading)">Subtotal: ${subtotal(manual)}</div>
           ${(pendientes > 1 && puedeEditarValidacion()) ? `<button class="btn btn-primary" ${marcandoTodo ? 'disabled' : ''} data-action="marcar-todo-manual" data-id="${vm.id}">${marcandoTodo ? '<span class="spinner-inline"></span>Marcando…' : 'Marcar todo hecho'}</button>` : ''}
         </div>
       </div>`;
@@ -1226,6 +1296,7 @@ function renderExpandContent(vm) {
   const mockPostsArr = plataformasVm.map((plataforma) => renderMockPost({
     nombrePagina: vm.activoNombre,
     copy: vm.copy,
+    linkDestino: vm.linkDestino || '',
     mediaUrl: vm.imagenPreview,
     lightboxUrl: vm.imagenPreview,
     plataforma,
@@ -1282,7 +1353,7 @@ function renderExpandContent(vm) {
     </div>` : '';
   const header = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:8px;flex-wrap:wrap">
-      <h4 style="margin:0">${esc(vm.campana)}${vm.contenido ? ' - ' + esc(vm.contenido) : ''}</h4>
+      <h4 style="margin:0">${esc(vm.contenido || vm.campana)}</h4>
       <div style="display:flex;align-items:center;gap:14px;flex:none;flex-wrap:wrap">
         ${tieneComentarios ? '' : accionesTriggers}
         <span class="tag tag-accent" style="font-family:monospace">${esc(vm.codigo)}</span>
@@ -1346,7 +1417,11 @@ function renderExpandContent(vm) {
               <span style="font-family:var(--font-heading)">${esc(rl.objetivo)}</span> · ${esc(rl.audNombre)} · ${esc(rl.pctLabel)} · ${esc(rl.montoLabel)}
               ${rl.nomenclatura ? `<div style="font-size:11px;color:var(--color-neutral-500);font-family:monospace;margin-top:2px">${esc(rl.nomenclatura)}</div>` : ''}
             </div>
-            ${rl.isManual ? '<span class="tag tag-outline" style="flex:none">Manual — crear a mano en Meta</span>' : `<span style="font-size:11px;color:var(--color-neutral-500);font-family:monospace;flex:none">${esc(rl.ids)}</span>`}
+            ${rl.isManual
+              ? '<span class="tag tag-outline" style="flex:none">A mano — cargar en la plataforma</span>'
+              : (rl.adsetId
+                ? `<a class="btn btn-ghost" style="font-size:12px;padding:2px 8px;flex:none" target="_blank" rel="noopener" title="${esc(rl.ids)}" href="https://adsmanager.facebook.com/adsmanager/manage/adsets?${vm.adAccountId ? 'act=' + esc(vm.adAccountId) + '&' : ''}selected_adset_ids=${esc(rl.adsetId)}"><i class="ph ph-arrow-square-out"></i> Ver en Ads Manager</a>`
+                : '')}
           </div>`).join('')}
       </div>`;
   } else if (vm.isManualOnly) {
@@ -1445,9 +1520,14 @@ function renderEditarModal() {
   const redesHtml = [['facebook', 'Facebook'], ['instagram', 'Instagram']].map(([v, l]) => '<label style="display:inline-flex;align-items:center;gap:4px;margin-right:14px;font-size:13px"><input type="checkbox" class="editarpauta-redes-chk" value="' + v + '" ' + ((c.redes || []).includes(v) ? 'checked' : '') + '> ' + l + '</label>').join('');
   const placementsHtml = [['feed', 'Feed'], ['stories', 'Stories'], ['reels', 'Reels']].map(([v, l]) => '<label style="display:inline-flex;align-items:center;gap:4px;margin-right:14px;font-size:13px"><input type="checkbox" class="editarpauta-placements-chk" value="' + v + '" ' + ((c.placements || []).includes(v) ? 'checked' : '') + '> ' + l + '</label>').join('');
   const formatoOpts = '<option value="">— elegir —</option>' + (state.pdFormatos || []).map((f) => '<option value="' + esc(f.appsheet_valor) + '" ' + (f.appsheet_valor === c.formato ? 'selected' : '') + '>' + esc(f.appsheet_valor) + '</option>').join('');
+  // Sin "Otra" (audiencia manual) — recorte a MVP, ver src/config/mvp.js.
+  // "Otra" según el modo de la SESIÓN actual (no el de la pauta que se
+  // edita — el modo queda fijo por pauta, esto es una simplificación:
+  // alcanza para hoy, no hay forma de estar editando una pauta de un modo
+  // distinto al que se eligió al entrar).
   const audOpts = '<option value="">— elegir —</option>'
     + (state.pdAudiencias || []).map((a) => '<option value="' + esc(a.codigo) + '" ' + (a.codigo === c.audienciaCodigo ? 'selected' : '') + '>' + esc(a.nombre) + '</option>').join('')
-    + '<option value="Otra" ' + (c.audienciaCodigo === 'Otra' ? 'selected' : '') + '>Otra (audiencia no guardada)</option>';
+    + (state.modoActivo === 'automatizado' ? '' : '<option value="Otra" ' + (c.audienciaCodigo === 'Otra' ? 'selected' : '') + '>Otra (audiencia no guardada)</option>');
   const esPublico = c.visibilidad === 'PUBLICO';
   const preview = c.imagenPreview
     ? '<img src="' + esc(c.imagenPreview) + '" data-action="abrir-lightbox" data-url="' + esc(c.imagenPreview) + '" style="width:120px;height:120px;object-fit:cover;border-radius:var(--radius-md);cursor:zoom-in;flex:none" title="Ver más grande">'
@@ -1536,16 +1616,18 @@ function renderNavUsuario() {
 }
 
 function render() {
-  // Onboarding: Login → Proyecto → Oficial/Informativo. Mientras falte
-  // alguna de las 3, ni siquiera se toca el resto del render — se muestra
-  // esa pantalla sola y se corta acá.
+  // Onboarding: Login → Proyecto → Modo → (Normal) Ecosistema. Mientras
+  // falte alguna, ni siquiera se toca el resto del render — se muestra esa
+  // pantalla sola y se corta acá.
   const pantalla = pantallaActual();
   document.getElementById('pantalla-login').hidden = pantalla !== 'login';
   document.getElementById('pantalla-proyecto').hidden = pantalla !== 'proyecto';
+  document.getElementById('pantalla-modo').hidden = pantalla !== 'modo';
   document.getElementById('pantalla-ecosistema').hidden = pantalla !== 'ecosistema';
   document.getElementById('app-shell').hidden = pantalla !== 'app';
   if (pantalla === 'login') { renderPantallaLogin(); return; }
   if (pantalla === 'proyecto') { renderPantallaProyecto(); return; }
+  if (pantalla === 'modo') { renderPantallaModo(); return; }
   if (pantalla === 'ecosistema') { renderPantallaEcosistema(); return; }
 
   renderNavUsuario();
@@ -1559,7 +1641,7 @@ function render() {
   document.getElementById('batch-bar').hidden = true;
   if (!enPendientes || state.cargando) return;
 
-  document.querySelector('.grid-header').style.gridTemplateColumns = COLS_PENDIENTES;
+  document.querySelectorAll('.grid-header').forEach((h) => { h.style.gridTemplateColumns = COLS_PENDIENTES; });
 
   renderToast();
 
@@ -1594,9 +1676,19 @@ function render() {
   // todavía le falta corregirla y volver a mandarla a Validación — no es
   // un caso cerrado como desestimada/confirmada.
   const pendientes = vms.filter((vm) => !vm.isConfirmed && !vm.isManualDone && !vm.isDesestimada && !vm.isPendienteManual);
-  const historial = vms.filter((vm) => vm.isConfirmed || vm.isManualDone || vm.isDesestimada || vm.isPendienteManual);
+  // "Para cargar a mano": sección propia (pedido del usuario 2026-09-12) —
+  // es trabajo pendiente del implementador, no historial. Cuenta en el nav
+  // junto con las que esperan validación, igual que en la pantalla de Proyecto.
+  const paraMano = vms.filter((vm) => vm.isPendienteManual);
+  const historial = vms.filter((vm) => vm.isConfirmed || vm.isManualDone || vm.isDesestimada);
 
-  document.getElementById('pendientes-count').textContent = pendientes.length + ' pendientes';
+  document.getElementById('pendientes-count').textContent = (pendientes.length + paraMano.length) + ' pendientes';
+
+  const manualWrap = document.getElementById('manual-wrap');
+  manualWrap.hidden = paraMano.length === 0;
+  document.getElementById('manual-label').textContent = 'Para cargar a mano (' + paraMano.length + ')';
+  const filasMano = paraMano.reduce((acc, vm) => acc.concat(splitVMSiMixto(vm)), []);
+  document.getElementById('lista-manual').innerHTML = filasMano.map((vm) => renderItemRow(vm, COLS_PENDIENTES, false)).join('');
 
   // Si una pieza mezcla celdas automáticas y manuales (audiencia "Otra" +
   // audiencia real, por ejemplo), se muestra como dos filas separadas — cada
@@ -1604,17 +1696,9 @@ function render() {
   const filasPendientes = pendientes.reduce((acc, vm) => acc.concat(splitVMSiMixto(vm)), []);
   document.getElementById('lista-pendientes').innerHTML = filasPendientes.length
     ? filasPendientes.map((vm) => renderItemRow(vm, COLS_PENDIENTES, false)).join('')
-    : '<p style="color:var(--color-neutral-500);padding:16px 10px">No hay piezas esperando validación. Las que se carguen desde "Pedido de Anuncios" aparecen acá.</p>';
+    : '<p style="color:var(--color-neutral-500);padding:16px 10px">No hay piezas pendientes. Las que se carguen desde "Pedido de Anuncios" aparecen acá.</p>';
 
-  const historialWrap = document.getElementById('historial-toggle-wrap');
-  historialWrap.hidden = historial.length === 0;
-  document.getElementById('historial-label').textContent = 'Historial (' + historial.length + ')';
-  document.querySelector('#historial-toggle i').className = 'ph ' + (state.historyOpen ? 'ph-caret-down' : 'ph-caret-right');
-  const listaHistorial = document.getElementById('lista-historial');
-  listaHistorial.hidden = !state.historyOpen;
-  if (state.historyOpen) {
-    listaHistorial.innerHTML = historial.map((vm) => renderItemRow(vm, COLS_HISTORIAL, true)).join('');
-  }
+  renderHistorialSheet(vms);
 
   // barra de selección múltiple — confirmar y desestimar son mutuamente
   // excluyentes (las dos son fixed bottom, se pisarían si mostraran juntas).
@@ -1645,6 +1729,134 @@ function render() {
     document.getElementById('batch-desestimar-error').hidden = !state.batchDesestimarError;
     document.getElementById('batch-desestimar-error').textContent = state.batchDesestimarError || '';
   }
+}
+
+// ---------- Historial desde la hoja CodigosContenido ----------
+// Pedido del usuario (2026-09-12): el Historial es lo que se cargó en AppSheet
+// + PAUTADOR (misma hoja), desde septiembre, del proyecto y canal elegidos y
+// solo lo propio (admin ve todo). Estados: "Pautado" / "Ver en Asana" /
+// "Desestimada". Una fila que creó PAUTADOR se expande con el detalle de
+// siempre (preview, reparto, Ads Manager); una de AppSheet muestra la ficha
+// y "Marcar pautado".
+const COLS_HISTORIAL_SHEET = '32px 88px 130px minmax(0,0.9fr) minmax(0,1.6fr) 90px minmax(0,0.8fr) minmax(0,0.9fr) 110px 24px';
+
+async function cargarHistorialSheet() {
+  state.historial.cargando = true;
+  try {
+    const r = await apiFetch('/api/historial');
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detalle || data.error || 'No se pudo leer el historial.');
+    state.historial.filas = data.filas || [];
+    state.historial.desde = data.desde || '';
+    state.historial.sinHoja = !!data.sinHoja;
+    state.historial.error = null;
+  } catch (err) {
+    state.historial.error = err.message;
+  }
+  state.historial.cargando = false;
+  state.historial.cargado = true;
+}
+
+function filasHistorialFiltradas() {
+  const q = (state.historial.busqueda || '').trim().toLowerCase();
+  const act = state.historial.activo || '';
+  return (state.historial.filas || []).filter((f) =>
+    (!act || f.activo === act)
+    && (!q || [f.codigo, f.campana, f.contenido, f.activo, f.audiencia].some((v) => String(v || '').toLowerCase().includes(q))));
+}
+
+function tagEstadoHistorial(estado) {
+  if (estado === 'Pautado') return '<span class="tag tag-accent-2">Pautado</span>';
+  if (estado === 'Desestimada') return '<span class="tag tag-neutral">Desestimada</span>';
+  return '<span class="tag tag-outline">Ver en Asana</span>';
+}
+
+function renderFilaHistorialSheet(f, vms) {
+  const vm = f.correlation_id ? vms.find((v) => v.id === f.correlation_id) : null;
+  const expandida = vm ? vm.isExpanded : state.historial.expandido === f.codigo;
+  const fecha = f.fecha ? f.fecha.slice(8, 10) + '/' + f.fecha.slice(5, 7) : '';
+  const linea = `
+    <div class="row-line" style="grid-template-columns:${COLS_HISTORIAL_SHEET}" data-action="hist-toggle" data-id="${esc(f.codigo)}">
+      <div></div>
+      <div class="row-ellip" style="font-size:13px">${esc(fecha)}</div>
+      <div class="row-ellip" style="font-size:12px;font-family:monospace">${esc(f.codigo)}</div>
+      <div class="row-ellip">${esc(f.activo)}</div>
+      <div class="row-ellip">${esc(f.contenido || f.campana)}</div>
+      <div class="row-ellip" style="font-size:12px">${esc(f.plataforma)}</div>
+      <div class="row-ellip" style="font-size:12px">${esc(f.objetivo)}</div>
+      <div class="row-ellip" style="font-size:12px">${esc(f.audiencia)}</div>
+      <div>${tagEstadoHistorial(f.estado)}</div>
+      <div style="text-align:center"><i class="ph ${expandida ? 'ph-caret-up' : 'ph-caret-down'}"></i></div>
+    </div>`;
+  let detalle = '';
+  if (expandida) {
+    if (vm) {
+      detalle = renderExpandContent(vm);
+    } else {
+      const marcando = state.historial.marcando === f.codigo;
+      const puedeMarcar = puedeEditarValidacion() && f.estado !== 'Pautado';
+      const dato = (k, v) => (v ? `<div><span style="color:var(--color-neutral-500)">${k}:</span> ${esc(v)}</div>` : '');
+      detalle = `
+        <div style="padding:14px 16px 16px 48px;background:var(--color-bg);border-top:1px solid var(--color-divider);font-size:13px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px 20px">
+          ${dato('Código', f.codigo)}${dato('Fecha', f.fecha)}${dato('Tipo', f.tipo)}${dato('Eje', f.eje)}${dato('Campaña', f.campana)}${dato('Formato', f.formato)}${dato('Visibilidad', f.visibilidad)}${dato('Plataforma', f.plataforma)}${dato('Objetivo', f.objetivo)}${dato('Audiencia', f.audiencia)}${dato('Cargado por', f.creador)}${f.marcado_por ? dato('Marcado pautado por', f.marcado_por + (f.marcado_en ? ' · ' + String(f.marcado_en).slice(0, 10) : '')) : ''}
+          <div style="grid-column:1 / -1;margin-top:8px;display:flex;gap:10px;align-items:center">
+            <span style="color:var(--color-neutral-500)">Cargada por AppSheet — el seguimiento está en Asana.</span>
+            ${puedeMarcar ? `<button class="btn btn-primary" style="font-size:12px;padding:4px 10px" data-action="hist-marcar-pautado" data-id="${esc(f.codigo)}" ${marcando ? 'disabled' : ''}>${marcando ? 'Marcando…' : 'Marcar pautado'}</button>` : ''}
+          </div>
+        </div>`;
+    }
+  }
+  return `<div class="row-wrap">${linea}${detalle}</div>`;
+}
+
+function renderHistorialSheet(vms) {
+  const wrap = document.getElementById('historial-toggle-wrap');
+  const h = state.historial;
+  wrap.hidden = false;
+  const filtradas = filasHistorialFiltradas();
+  document.getElementById('historial-label').textContent = 'Historial (' + (h.cargando && !h.cargado ? '…' : filtradas.length) + ')';
+  document.querySelector('#historial-toggle i').className = 'ph ' + (state.historyOpen ? 'ph-caret-down' : 'ph-caret-right');
+  document.getElementById('historial-cuerpo').hidden = !state.historyOpen;
+  if (!state.historyOpen) return;
+
+  const activos = [...new Set((h.filas || []).map((f) => f.activo).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+  const selActivo = document.getElementById('hist-activo');
+  selActivo.innerHTML = '<option value="">Todos los activos</option>' + activos.map((a) => `<option value="${esc(a)}" ${a === h.activo ? 'selected' : ''}>${esc(a)}</option>`).join('');
+  document.getElementById('hist-desde').textContent = h.desde ? 'desde el ' + h.desde.slice(8, 10) + '/' + h.desde.slice(5, 7) + '/' + h.desde.slice(0, 4) : '';
+  document.getElementById('hist-grid-header').style.gridTemplateColumns = COLS_HISTORIAL_SHEET;
+
+  const lista = document.getElementById('lista-historial');
+  if (h.error) { lista.innerHTML = `<p class="error" style="padding:12px 10px">${esc(h.error)}</p>`; return; }
+  if (h.sinHoja) { lista.innerHTML = '<p style="color:var(--color-neutral-500);padding:16px 10px">La hoja CodigosContenido no está configurada (CODIGOS_SHEET_ID).</p>'; return; }
+  if (h.cargando && !h.cargado) { lista.innerHTML = '<p style="color:var(--color-neutral-500);padding:16px 10px">Cargando historial…</p>'; return; }
+  lista.innerHTML = filtradas.length
+    ? filtradas.map((f) => renderFilaHistorialSheet(f, vms)).join('')
+    : '<p style="color:var(--color-neutral-500);padding:16px 10px">Nada cargado en este período para este proyecto y canal.</p>';
+}
+
+function toggleHistorialFila(codigo) {
+  const f = (state.historial.filas || []).find((x) => x.codigo === codigo);
+  if (!f) return;
+  if (f.correlation_id) { toggleExpand(f.correlation_id); return; }
+  state.historial.expandido = state.historial.expandido === codigo ? null : codigo;
+  render();
+}
+
+async function marcarPautadoHistorial(codigo) {
+  state.historial.marcando = codigo;
+  render();
+  try {
+    const r = await apiFetch('/api/historial/' + encodeURIComponent(codigo) + '/pautado', { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detalle || data.error || 'No se pudo marcar.');
+    const f = state.historial.filas.find((x) => x.codigo === codigo);
+    if (f) { f.estado = 'Pautado'; f.marcado_por = data.marcado_por; f.marcado_en = data.marcado_en; }
+    state.toast = { titulo: 'Marcada como pautada', lines: [{ codigo, resumen: 'Queda como "Pautado" en el Historial.' }] };
+  } catch (err) {
+    state.toast = { titulo: 'No se pudo marcar', lines: [{ codigo, resumen: err.message }] };
+  }
+  state.historial.marcando = null;
+  render();
 }
 
 // ---------- Helpers compartidos ----------
@@ -1688,13 +1900,18 @@ function renderDropdownMulti(id, claseChk, opciones, placeholder, seleccionados)
     </div>`;
 }
 
+// Sin "Otra" (audiencia manual) — recorte a MVP, ver src/config/mvp.js.
+// "Otra" (audiencia manual) solo se ofrece en modo "normal" — en
+// "automatizado" está bloqueada (ver validación en pedidos.js).
 function renderAudienciaSelect(id, audiencias, seleccionado) {
-  const opts = audiencias.map((a) => `<option value="${esc(a.codigo)}" ${a.codigo === seleccionado ? 'selected' : ''}>${esc(a.nombre)} (${esc(a.codigo)})</option>`).join('');
-  return `<select class="input" id="${id}"><option value="">— elegir —</option>${opts}<option value="Otra" ${seleccionado === 'Otra' ? 'selected' : ''}>Otra (audiencia no guardada)</option></select>`;
+  const opts = audiencias.map((a) => `<option value="${esc(a.codigo)}" ${a.codigo === seleccionado ? 'selected' : ''}>${esc(a.nombre)}</option>`).join('');
+  const otra = state.modoActivo === 'automatizado' ? '' : `<option value="Otra" ${seleccionado === 'Otra' ? 'selected' : ''}>Otra (audiencia no guardada)</option>`;
+  return `<select class="input" id="${id}"><option value="">— elegir —</option>${opts}${otra}</select>`;
 }
 
 function renderRefuerzoDropdown(prefix, audiencias, seleccionados) {
-  const opciones = audiencias.map((a) => [a.codigo, a.nombre]).concat([['Otra', 'Otra (audiencia no guardada)']]);
+  const opciones = audiencias.map((a) => [a.codigo, a.nombre]);
+  if (state.modoActivo !== 'automatizado') opciones.push(['Otra', 'Otra (audiencia no guardada)']);
   return renderDropdownMulti(`${prefix}-refuerzo-dd`, `${prefix}-refuerzo-chk`, opciones, '— opcional, uno o más —', seleccionados);
 }
 
@@ -1737,21 +1954,18 @@ function placementDisponibleUI(formatoInfo, placement, materialEsImagen) {
   return false;
 }
 
-// Todos los placements habilitados para el Formato — se usan para
-// preseleccionar (el usuario después puede destildar los que no quiera).
-function placementsDisponibles(formatoInfo, materialEsImagen) {
-  return ['feed', 'stories', 'reels'].filter((p) => placementDisponibleUI(formatoInfo, p, materialEsImagen));
-}
-
 // Proporción recomendada por Placement — reemplaza la vieja idea de que la
 // proporción vivía en el Formato. Debe coincidir con TOLERANCIA_PROPORCION/
 // coincideProporcion() en metaMedia.js (servidor) para que un warning acá
 // no contradiga lo que el servidor termina aceptando o rechazando.
 const TOLERANCIA_PROPORCION_UI = 0.12;
+// Specs del equipo (AppSheet/Specs Meta.xlsx, 2026-09-11): Feed 1:1 o 4:5,
+// Stories y Reels 9:16. Se muestran como ayuda debajo de Placement y las usa
+// evaluarSpecsPieza() para avisar/bloquear antes de confirmar.
 const DIMENSIONES_POR_PLACEMENT = {
-  feed: null,
-  stories: { aspecto: '9:16', label: '9:16 (vertical)' },
-  reels: { aspecto: '9:16', label: '9:16 (vertical)' },
+  feed: { aspectos: ['1:1', '4:5'], label: '1:1 (1080×1080) o 4:5 (1080×1350)' },
+  stories: { aspecto: '9:16', aspectos: ['9:16'], label: '9:16 (1080×1920)' },
+  reels: { aspecto: '9:16', aspectos: ['9:16'], label: '9:16 (1080×1920)' },
 };
 
 function coincideProporcionUI(width, height, aspecto) {
@@ -1761,11 +1975,77 @@ function coincideProporcionUI(width, height, aspecto) {
   return Math.abs((width / height) - (aw / ah)) <= TOLERANCIA_PROPORCION_UI;
 }
 
-// De los placements elegidos (o el default si no se tildó ninguno), la
-// dimensión recomendada más exigente — hoy Stories y Reels piden lo mismo
-// (9:16), así que alcanza con la primera que pida algo.
+// Texto de ayuda con las medidas recomendadas de los placements elegidos.
 function dimensionRecomendada(placements) {
-  return placements.map((p) => DIMENSIONES_POR_PLACEMENT[p]).find(Boolean) || null;
+  const nombre = { feed: 'Feed', stories: 'Stories', reels: 'Reels' };
+  const partes = (placements || [])
+    .filter((p) => DIMENSIONES_POR_PLACEMENT[p])
+    .map((p) => nombre[p] + ' ' + DIMENSIONES_POR_PLACEMENT[p].label);
+  return partes.length ? partes.join(' · ') : null;
+}
+
+// Regla acordada con el usuario: se BLOQUEA solo lo que Meta rechaza de
+// verdad (Stories/Reels no verticales, carrusel de video que no es 1:1,
+// carrusel con proporciones mezcladas); todo lo demás es un AVISO y deja
+// seguir. Misma tolerancia que el servidor (metaMedia.js), para que un aviso
+// acá no contradiga lo que el servidor termina aceptando.
+function evaluarSpecsPieza({ placements, modo, esVideo, conLink, medidas }) {
+  const bloqueos = [];
+  const avisos = [];
+  const lista = (medidas || []).filter((m) => m && m.width && m.height);
+  const fmt = (m) => m.width + '×' + m.height;
+  if (!lista.length) {
+    avisos.push('No pude medir esta pieza desde acá — Meta la va a revisar al confirmar (Stories/Reels piden 9:16; Feed 1:1 o 4:5).');
+    return { bloqueos, avisos };
+  }
+  const m = lista[0];
+  const es = (asp) => coincideProporcionUI(m.width, m.height, asp);
+  const tieneFeed = placements.includes('feed');
+  const tieneStories = placements.includes('stories');
+  const tieneReels = placements.includes('reels');
+
+  if (modo === 'carrusel') {
+    const ratios = lista.map((x) => x.width / x.height);
+    if (ratios.some((r) => Math.abs(r - ratios[0]) > TOLERANCIA_PROPORCION_UI)) {
+      bloqueos.push('Carrusel: todas las piezas tienen que tener la misma proporción (hoy: ' + lista.map(fmt).join(', ') + ').');
+    }
+    if (esVideo && !es('1:1')) bloqueos.push('Carrusel de video: Meta solo acepta 1:1 (1080×1080). Esta pieza es ' + fmt(m) + '.');
+    else if (!es('1:1')) avisos.push('Carrusel en pauta va 1:1 (1080×1080) porque lleva link. Esta pieza es ' + fmt(m) + '.');
+    return { bloqueos, avisos };
+  }
+
+  if (tieneStories && !es('9:16')) bloqueos.push('Stories pide 9:16 (1080×1920). Esta pieza es ' + fmt(m) + (m.height > m.width ? '' : ', no es vertical') + '.');
+  if (tieneReels && !es('9:16')) bloqueos.push('Reels pide 9:16 (1080×1920). Esta pieza es ' + fmt(m) + '.');
+  if (tieneStories && es('9:16')) avisos.push('Stories: dejá libre el 14% de arriba (~250 px) y el 20% de abajo (~350 px) — ahí Meta pone el nombre y los botones.');
+  if (tieneReels && es('9:16')) avisos.push('Reels: dejá libre 14% arriba, 40% abajo y 6% de cada lado. Si además sale en Feed se recorta a 4:5: lo importante, centrado.');
+  if (tieneFeed) {
+    if (!es('1:1') && !es('4:5')) avisos.push('Feed recomienda 1:1 (1080×1080) o 4:5 (1080×1350). Esta pieza es ' + fmt(m) + ' — Meta la va a reencuadrar.');
+    else if (es('4:5') && conLink) avisos.push('4:5 con link suele traer problemas con el botón (CTA) — con link el equipo recomienda 1:1 (1080×1080).');
+  }
+  return { bloqueos, avisos };
+}
+
+// Mide la pieza en el navegador (sin subir nada ni pedirle al servidor):
+// Image() para imágenes, <video> con preload=metadata para videos. null si
+// no se pudo (URL vacía, no carga, tarda más de 6 s).
+function medirMedia(url, esVideo) {
+  return new Promise((resolve) => {
+    if (!url) { resolve(null); return; }
+    const timeout = setTimeout(() => resolve(null), 6000);
+    if (esVideo) {
+      const v = document.createElement('video');
+      v.preload = 'metadata';
+      v.muted = true;
+      v.onloadedmetadata = () => { clearTimeout(timeout); resolve({ width: v.videoWidth, height: v.videoHeight }); };
+      v.onerror = () => { clearTimeout(timeout); resolve(null); };
+      v.src = url;
+    } else {
+      const im = new Image();
+      im.onload = () => { clearTimeout(timeout); resolve({ width: im.naturalWidth, height: im.naturalHeight }); };
+      im.onerror = () => { clearTimeout(timeout); resolve(null); };
+      im.src = url;
+    }
+  });
 }
 
 function renderPlacementsCheckboxes(seleccionados, formatoInfo, materialEsImagen, bloqueadoEnFeed, claseChk) {
@@ -1858,27 +2138,22 @@ function calcularContenido(campana, linea, formato) {
   return `${campana}${linea ? ` "${linea}"` : ''}${formato ? ` (${formato})` : ''}`;
 }
 
-// Ya no antepone "Contenido:" al valor — ahora vive en un campo propio con
-// su propia etiqueta ("Contenido"), repetirlo ahí adentro quedaba redundante
-// (mismo criterio que ya se aplicó al desplegable de Formato).
-function actualizarPreviewContenido(elId, campana, linea, formato) {
-  const el = document.getElementById(elId);
-  const contenido = calcularContenido(campana, linea, formato);
-  el.innerHTML = contenido ? `<code>${esc(contenido)}</code>` : '<span style="color:var(--color-neutral-400)">Escribí la Campaña para previsualizarlo.</span>';
-}
-
 async function cargarDatosPedido() {
-  const [rProy, rEjes, rTipos, rFormatos, rObjetivos, rAud, rLim] = await Promise.all([
-    apiFetch('/api/proyectos'),
+  const [rProy, rEjes, rTipos, rFormatos, rObjetivos, rLim, rPlat] = await Promise.all([
+    apiFetch('/api/proyectos?detalle=1'),
     apiFetch('/api/ejes'),
     apiFetch('/api/tipos'),
     apiFetch('/api/formatos'),
     apiFetch('/api/objetivos'),
-    apiFetch('/api/audiencias?activo_key=test--tres-empanadas'),
     apiFetch('/api/limites'),
+    apiFetch('/api/plataformas'),
   ]);
   state.limites = rLim.ok ? await rLim.json() : { minDiario: 0, moneda: '' };
-  state.pdProyectos = await rProy.json();
+  state.pdPlataformas = rPlat.ok ? await rPlat.json() : [];
+  state.pd2Plataformas = state.pd2Plataformas.filter((n) => state.pdPlataformas.find((p) => p.nombre === n && p.habilitada !== false));
+  if (!state.pd2Plataformas.length) state.pd2Plataformas = ['Meta'];
+  state.proyectosDetalle = rProy.ok ? await rProy.json() : [];
+  state.pdProyectos = state.proyectosDetalle.map((p) => p.proyecto);
   // El Proyecto ya se eligió en el onboarding (pantalla 2) — el desplegable
   // queda fijo a ese, salvo que el Admin haya elegido "Ver todos los
   // proyectos" (proyectoActivo === 'TODOS'), donde sigue siendo libre.
@@ -1890,13 +2165,24 @@ async function cargarDatosPedido() {
   state.pdTipos = await rTipos.json();
   state.pdFormatos = await rFormatos.json();
   state.pdObjetivos = ordenarObjetivos(await rObjetivos.json());
-  state.pdAudiencias = await rAud.json();
   // Proyecto/Activo compartidos, usados por el modo CSV — el resto de la
   // pantalla (los módulos) usa su propio pd2Proyecto/pd2ActivoKey.
   if (!state.pdProyecto || !state.pdProyectos.includes(state.pdProyecto)) {
     state.pdProyecto = state.pdProyectos[0] || null;
   }
   if (state.pdProyecto) await cargarActivosPedido();
+  // Las Audiencias son del Activo, no de un fetch único — recién acá ya se
+  // sabe cuál quedó elegido por default (ver cargarActivosPedido).
+  await cargarAudienciasPorActivo(state.pdActivoKey);
+}
+
+// Audiencias de un Activo puntual (equiv_audiencia) — se vuelve a pedir
+// cada vez que cambia el Activo elegido (Módulo 1/CSV), nunca es un fetch
+// fijo: cada Activo tiene sus propias audiencias guardadas en Meta.
+async function cargarAudienciasPorActivo(activoKey) {
+  if (!activoKey) { state.pdAudiencias = []; return; }
+  const r = await apiFetch(`/api/audiencias?activo_key=${encodeURIComponent(activoKey)}`);
+  state.pdAudiencias = r.ok ? await r.json() : [];
 }
 
 async function cargarCampanasSugeridas(proyecto) {
@@ -1906,20 +2192,25 @@ async function cargarCampanasSugeridas(proyecto) {
 
 // El desplegable de Activo muestra TODOS los activos reales del proyecto
 // (pedido del usuario: "tienen que aparecer todos") — es un campo de
-// referencia/registro (queda en "activo_solicitado"). La ejecución real
-// (audiencias, publicaciones, y más adelante Meta) sigue siempre contra
-// Tres Empanadas, el único activo con credenciales de verdad hoy.
+// referencia/registro (queda en "activo_solicitado"), y también el que
+// define contra qué cuenta/página de Meta se ejecuta de verdad (ver
+// cola_pautas.activo en crearPedido).
 async function cargarActivosPedido() {
-  const r = await apiFetch(`/api/activos?proyecto=${encodeURIComponent(state.pdProyecto)}`);
+  // soloHabilitados=1 solo en modo "automatizado" — "normal" ve todos los
+  // activos del proyecto, no está atado a qué activos tienen la
+  // automatización (System User de Meta) lista.
+  const soloHabilitados = state.modoActivo === 'automatizado' ? '&soloHabilitados=1' : '';
+  const r = await apiFetch(`/api/activos?proyecto=${encodeURIComponent(state.pdProyecto)}${soloHabilitados}`);
   state.pdActivos = r.ok ? await r.json() : [];
-  const activoTest = state.pdActivos.find((a) => a.activo_key === 'test--tres-empanadas');
-  state.pdActivoKey = (activoTest || state.pdActivos[0] || {}).activo_key || null;
+  state.pdActivoKey = (state.pdActivos[0] || {}).activo_key || null;
 }
 
 // ---------- "Agregar Activos / Audiencias" ----------
 
 async function cargarDatosAdmin() {
-  const r = await apiFetch('/api/activos');
+  // todos=1: la pestaña de administración ve TODOS los activos, sin el
+  // recorte por canal (Oficial/Informativo) que aplica al Pedido.
+  const r = await apiFetch('/api/activos?todos=1');
   state.admActivos = r.ok ? await r.json() : [];
   state.admActivosCargados = true;
   if (!state.admAudActivoKey && state.admActivos.length) state.admAudActivoKey = state.admActivos[0].activo_key;
@@ -1946,12 +2237,15 @@ function renderTabAdmin() {
   document.getElementById('adm-activo-error').textContent = state.admActivoError || '';
   document.getElementById('adm-activo-exito').hidden = !state.admActivoExito;
   if (state.admActivoExito) document.getElementById('adm-activo-exito').textContent = state.admActivoExito;
+  // Nombres agrupados por proyecto (antes eran las claves internas).
+  const porProyecto = {};
+  state.admActivos.forEach((a) => { (porProyecto[a.proyecto] = porProyecto[a.proyecto] || []).push(a.activo || a.activo_key); });
   document.getElementById('adm-activos-lista').innerHTML = state.admActivos.length
-    ? `${state.admActivos.length} activo(s) ya cargados: ` + state.admActivos.map((a) => `<code>${esc(a.activo_key)}</code>`).join(', ')
+    ? `${state.admActivos.length} activo(s) ya cargados:` + Object.keys(porProyecto).sort((x, y) => x.localeCompare(y, 'es')).map((p) => `<div style="margin-top:4px"><strong>${esc(p)}</strong>: ${porProyecto[p].map(esc).join(' · ')}</div>`).join('')
     : 'Todavía no hay ningún activo cargado.';
 
   const selActivo = document.getElementById('adm-aud-activo');
-  selActivo.innerHTML = state.admActivos.map((a) => `<option value="${esc(a.activo_key)}" ${a.activo_key === state.admAudActivoKey ? 'selected' : ''}>${esc(a.proyecto)} — ${esc(a.activo)}</option>`).join('');
+  selActivo.innerHTML = state.admActivos.map((a) => `<option value="${esc(a.activo_key)}" ${a.activo_key === state.admAudActivoKey ? 'selected' : ''}>${esc(a.activo)}</option>`).join('');
 
   document.getElementById('adm-aud-error').hidden = !state.admAudError;
   document.getElementById('adm-aud-error').textContent = state.admAudError || '';
@@ -1994,7 +2288,7 @@ async function crearActivoAdmin() {
     document.getElementById('adm-activo-ig').value = '';
     document.getElementById('adm-activo-provincia').value = '';
     state.admAudActivoKey = data.activo_key;
-    const r2 = await apiFetch('/api/activos');
+    const r2 = await apiFetch('/api/activos?todos=1');
     state.admActivos = r2.ok ? await r2.json() : state.admActivos;
     renderTabAdmin();
   } catch (err) {
@@ -2031,6 +2325,305 @@ async function crearAudienciaAdmin() {
     state.admAudError = err.message;
     renderTabAdmin();
   }
+}
+
+// ---------- Pestaña "Panel Usuarios" (solo administradores) ----------
+// Alta por mail + accesos por Proyecto y Activo. El server decide qué se
+// puede hacer (superadmin, deshabilitar, cambiar rol — ver
+// services/usuarios.js); acá se refleja lo mismo en la UI pero la regla
+// real es la del server.
+
+const ROL_LABEL = { pm_cuentas: 'PM / Cuentas', implementador: 'Implementador', administrador: 'Administrador' };
+
+async function cargarPanelUsuarios(forzar) {
+  if (state.usuCargando) return;
+  if (state.usuDatos && !forzar) { renderTabUsuarios(); return; }
+  state.usuCargando = true;
+  state.usuError = null;
+  renderTabUsuarios();
+  try {
+    const r = await apiFetch('/api/admin/usuarios');
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'No se pudo leer la lista de usuarios.');
+    state.usuDatos = data;
+    if (state.usuSelId && !data.usuarios.find((u) => u.id === state.usuSelId)) state.usuSelId = null;
+    if (state.usuSelId) armarEdicionUsuario(state.usuSelId);
+  } catch (err) {
+    state.usuError = err.message;
+  }
+  state.usuCargando = false;
+  renderTabUsuarios();
+}
+
+function claveAcceso(proyecto, activoKey) {
+  return proyecto + '|' + (activoKey || '');
+}
+
+function armarEdicionUsuario(id) {
+  const u = (state.usuDatos.usuarios || []).find((x) => x.id === id);
+  if (!u) { state.usuEdit = null; return; }
+  state.usuEdit = {
+    id: u.id,
+    nombre: u.nombre || '',
+    rol: u.rol,
+    habilitado: u.habilitado !== false,
+    accesos: new Set((u.accesos || []).map((a) => claveAcceso(a.proyecto, a.activo_key))),
+  };
+}
+
+function seleccionarUsuarioPanel(id) {
+  state.usuSelId = id;
+  state.usuError = null;
+  state.usuExito = null;
+  armarEdicionUsuario(id);
+  renderTabUsuarios();
+}
+
+// Tildar "todo el proyecto" pisa los activos sueltos de ese proyecto (y los
+// deshabilita en la grilla); destildarlo deja el proyecto sin nada.
+function toggleAccesoPanel(proyecto, activoKey, marcado) {
+  if (!state.usuEdit) return;
+  const set = state.usuEdit.accesos;
+  if (!activoKey) {
+    [...set].filter((k) => k.startsWith(proyecto + '|')).forEach((k) => set.delete(k));
+    if (marcado) set.add(claveAcceso(proyecto, ''));
+  } else if (marcado) {
+    set.add(claveAcceso(proyecto, activoKey));
+  } else {
+    set.delete(claveAcceso(proyecto, activoKey));
+  }
+  renderTabUsuarios();
+}
+
+function accesosParaEnviar() {
+  return [...state.usuEdit.accesos].map((k) => {
+    const i = k.indexOf('|');
+    return { proyecto: k.slice(0, i), activo_key: k.slice(i + 1) };
+  });
+}
+
+async function crearUsuarioPanel() {
+  state.usuNuevoError = null;
+  const body = {
+    email: document.getElementById('usu-nuevo-email').value.trim(),
+    nombre: document.getElementById('usu-nuevo-nombre').value.trim(),
+    rol: document.getElementById('usu-nuevo-rol').value,
+  };
+  try {
+    const r = await apiFetch('/api/admin/usuarios', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'No se pudo dar de alta.');
+    document.getElementById('usu-nuevo-email').value = '';
+    document.getElementById('usu-nuevo-nombre').value = '';
+    state.usuDatos.usuarios.push(data);
+    state.usuDatos.usuarios.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
+    if (!state.usuarios.find((u) => u.id === data.id)) state.usuarios.push(data);
+    state.usuSelId = data.id;
+    state.usuExito = `"${data.nombre}" dado de alta — ahora asignale accesos.`;
+    armarEdicionUsuario(data.id);
+  } catch (err) {
+    state.usuNuevoError = err.message;
+  }
+  renderTabUsuarios();
+}
+
+async function guardarUsuarioPanel() {
+  if (!state.usuEdit || state.usuGuardando) return;
+  // Por si el click en Guardar llegó antes que el "change" del input.
+  const inpNombre = document.getElementById('usu-edit-nombre');
+  if (inpNombre) state.usuEdit.nombre = inpNombre.value;
+  state.usuGuardando = true;
+  state.usuError = null;
+  state.usuExito = null;
+  renderTabUsuarios();
+  const body = {
+    nombre: state.usuEdit.nombre,
+    rol: state.usuEdit.rol,
+    habilitado: state.usuEdit.habilitado,
+    accesos: state.usuEdit.rol === 'administrador' ? [] : accesosParaEnviar(),
+  };
+  try {
+    const r = await apiFetch('/api/admin/usuarios/' + encodeURIComponent(state.usuEdit.id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'No se pudo guardar.');
+    const i = state.usuDatos.usuarios.findIndex((u) => u.id === data.id);
+    if (i >= 0) state.usuDatos.usuarios[i] = data; else state.usuDatos.usuarios.push(data);
+    // El selector "actuando como" del nav usa state.usuarios — se refleja
+    // ahí también (rol/proyectos nuevos, o desaparece si se deshabilitó).
+    const j = state.usuarios.findIndex((u) => u.id === data.id);
+    if (data.habilitado === false) { if (j >= 0) state.usuarios.splice(j, 1); } else if (j >= 0) state.usuarios[j] = data; else state.usuarios.push(data);
+    armarEdicionUsuario(data.id);
+    state.usuExito = 'Guardado.';
+  } catch (err) {
+    state.usuError = err.message;
+  }
+  state.usuGuardando = false;
+  renderTabUsuarios();
+  renderNavUsuario();
+}
+
+// ---- Proyectos (Activar / Desactivar) dentro de Panel Usuarios ----
+async function cargarProyectosPanel() {
+  const r = await apiFetch('/api/admin/proyectos');
+  state.usuProyectos = r.ok ? await r.json() : [];
+  renderProyectosPanel();
+}
+
+function renderProyectosPanel() {
+  const cont = document.getElementById('usu-proyectos');
+  if (!cont) return;
+  const lista = state.usuProyectos || [];
+  if (!lista.length) { cont.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500)">Cargando proyectos…</p>'; return; }
+  const fecha = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—');
+  cont.innerHTML = '<div class="lista-scroll"><div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 110px 90px minmax(0,1.6fr) 260px;gap:10px;min-width:900px;font-size:13px">'
+    + '<div class="grid-header" style="display:contents"><div>Proyecto</div><div>Cliente</div><div>Último pedido</div><div>Últ. 45 días</div><div>Estado</div><div></div></div>'
+    + lista.map((p) => {
+      const chip = p.visible ? '<span class="tag tag-accent-2">Se ofrece</span>' : '<span class="tag tag-neutral">Oculto</span>';
+      const cambiando = state.usuProyectoCambiando === p.proyecto;
+      const btn = (estado, label, activo) => `<button type="button" class="btn ${activo ? 'btn-primary' : 'btn-secondary'}" style="font-size:12px;padding:3px 8px" data-action="usu-proyecto-estado" data-id="${esc(p.proyecto)}" data-estado="${estado}" ${cambiando || activo ? 'disabled' : ''}>${label}</button>`;
+      return `<div style="display:contents">
+        <div style="padding:8px 0;border-top:1px solid var(--color-divider);font-weight:600">${esc(p.proyecto)}</div>
+        <div style="padding:8px 0;border-top:1px solid var(--color-divider);color:var(--color-neutral-500)">${esc(p.cliente)}</div>
+        <div style="padding:8px 0;border-top:1px solid var(--color-divider)">${esc(fecha(p.ultimaFecha))}</div>
+        <div style="padding:8px 0;border-top:1px solid var(--color-divider)">${p.volumen}</div>
+        <div style="padding:8px 0;border-top:1px solid var(--color-divider)">${chip} <span style="font-size:11px;color:var(--color-neutral-500)">${esc(p.motivo)}</span></div>
+        <div style="padding:6px 0;border-top:1px solid var(--color-divider);display:flex;gap:6px;justify-content:flex-end">
+          ${btn('activado', 'Activar', p.estadoManual === 'activado')}${btn('desactivado', 'Desactivar', p.estadoManual === 'desactivado')}${btn('automatico', 'Automático', p.estadoManual === 'automatico')}
+        </div>
+      </div>`;
+    }).join('')
+    + '</div></div>';
+}
+
+async function cambiarEstadoProyectoPanel(proyecto, estado) {
+  state.usuProyectoCambiando = proyecto;
+  renderProyectosPanel();
+  try {
+    const r = await apiFetch('/api/admin/proyectos/' + encodeURIComponent(proyecto), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ estado }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'No se pudo cambiar.');
+    state.proyectosDetalle = []; // la pantalla de Proyecto se vuelve a pedir
+    await cargarProyectosPanel();
+  } catch (err) {
+    state.toast = { titulo: 'No se pudo cambiar el proyecto', lines: [{ codigo: proyecto, resumen: err.message }] };
+    render();
+  }
+  state.usuProyectoCambiando = null;
+  renderProyectosPanel();
+}
+
+function renderTabUsuarios() {
+  const cont = document.getElementById('tab-usuarios');
+  if (!cont || cont.hidden) return;
+  if (!state.usuProyectos || !state.usuProyectos.length) cargarProyectosPanel(); else renderProyectosPanel();
+  const datos = state.usuDatos;
+  const lista = document.getElementById('usu-lista');
+  const detalle = document.getElementById('usu-detalle');
+  document.getElementById('usu-nuevo-error').hidden = !state.usuNuevoError;
+  document.getElementById('usu-nuevo-error').textContent = state.usuNuevoError || '';
+
+  if (!datos) {
+    lista.innerHTML = `<p style="font-size:13px;color:var(--color-neutral-500)">${state.usuCargando ? 'Cargando usuarios…' : esc(state.usuError || '')}</p>`;
+    detalle.innerHTML = '';
+    return;
+  }
+  const soySuper = !!(datos.yo && datos.yo.es_superadmin);
+  const selRol = document.getElementById('usu-nuevo-rol');
+  if (!selRol.options.length) {
+    selRol.innerHTML = datos.roles.map((r) => `<option value="${esc(r)}">${esc(ROL_LABEL[r] || r)}</option>`).join('');
+  }
+  // Solo un superadmin puede dar de alta administradores.
+  [...selRol.options].forEach((o) => { o.disabled = o.value === 'administrador' && !soySuper; });
+  if (selRol.value === 'administrador' && !soySuper) selRol.value = 'pm_cuentas';
+
+  const filas = datos.usuarios.map((u) => {
+    const activo = u.id === state.usuSelId;
+    const resumen = u.rol === 'administrador'
+      ? 'todos los proyectos'
+      : (() => {
+        const proyectos = new Set((u.accesos || []).map((a) => a.proyecto));
+        const sueltos = (u.accesos || []).filter((a) => a.activo_key).length;
+        if (!proyectos.size) return 'sin accesos';
+        return `${proyectos.size} proyecto(s)` + (sueltos ? ` · ${sueltos} activo(s) suelto(s)` : '');
+      })();
+    return `<button type="button" data-action="usu-seleccionar" data-id="${esc(u.id)}"
+      style="display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 10px;border-radius:8px;border:1px solid ${activo ? 'var(--color-accent)' : 'var(--color-divider)'};background:${activo ? 'color-mix(in srgb, var(--color-accent) 10%, transparent)' : 'transparent'};color:inherit;font:inherit;cursor:pointer;margin-bottom:6px${u.habilitado === false ? ';opacity:.55' : ''}">
+      <span style="min-width:0">
+        <span style="display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(u.nombre)}${u.es_superadmin ? ' <span class="tag tag-accent" style="font-size:10px">superadmin</span>' : ''}${u.habilitado === false ? ' <span class="tag" style="font-size:10px">deshabilitado</span>' : ''}</span>
+        <span style="display:block;font-size:11px;color:var(--color-neutral-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(u.email || u.id)} · ${esc(resumen)}</span>
+      </span>
+      <span class="tag" style="flex:none;font-size:10px">${esc(ROL_LABEL[u.rol] || u.rol)}</span>
+    </button>`;
+  }).join('');
+  lista.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+      <span style="font-size:11px;letter-spacing:0.04em;text-transform:uppercase;color:var(--color-neutral-500)">Usuarios (${datos.usuarios.length})</span>
+      <button type="button" class="btn btn-ghost" data-action="usu-recargar" style="font-size:12px;padding:2px 6px">Recargar</button>
+    </div>${filas}`;
+
+  const ed = state.usuEdit;
+  if (!ed) {
+    detalle.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500);margin:0">Elegí un usuario de la lista para ver y editar sus accesos.</p>';
+    return;
+  }
+  const original = datos.usuarios.find((u) => u.id === ed.id) || {};
+  const esSuperObjetivo = original.es_superadmin === true;
+  const soyYo = datos.yo && datos.yo.id === ed.id;
+  // Mismas reglas que verificarPuedeEditar en el server.
+  const puedeTocarRol = soySuper || (ed.rol !== 'administrador' && original.rol !== 'administrador');
+  const bloqueadoTodo = esSuperObjetivo && !soyYo;
+  const puedeDeshabilitar = !esSuperObjetivo && !soyYo && !bloqueadoTodo;
+
+  const opcionesRol = datos.roles.map((r) => {
+    const deshab = r === 'administrador' ? !soySuper : (esSuperObjetivo);
+    return `<option value="${esc(r)}" ${ed.rol === r ? 'selected' : ''} ${deshab ? 'disabled' : ''}>${esc(ROL_LABEL[r] || r)}</option>`;
+  }).join('');
+
+  let grilla = '';
+  if (ed.rol === 'administrador') {
+    grilla = '<p style="font-size:13px;color:var(--color-neutral-500);margin:0">Los administradores ven todos los proyectos y todos los activos — no hace falta asignar nada.</p>';
+  } else {
+    grilla = datos.proyectos.map((p) => {
+      const completo = ed.accesos.has(claveAcceso(p.proyecto, ''));
+      const marcados = p.activos.filter((a) => ed.accesos.has(claveAcceso(p.proyecto, a.activo_key))).length;
+      const estado = completo ? 'todo el proyecto' : (marcados ? `${marcados} de ${p.activos.length} activos` : 'sin acceso');
+      return `<div style="border:1px solid var(--color-divider);border-radius:8px;padding:10px 12px;margin-bottom:8px${completo || marcados ? '' : ';opacity:.8'}">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer">
+          <input type="checkbox" data-usu-proyecto="${esc(p.proyecto)}" ${completo ? 'checked' : ''} ${bloqueadoTodo ? 'disabled' : ''}>
+          <span style="flex:1">${esc(p.proyecto)}</span>
+          <span style="font-size:11px;font-weight:400;color:var(--color-neutral-500)">${esc(estado)}</span>
+        </label>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:4px 14px;margin:8px 0 0 24px">
+          ${p.activos.map((a) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer${completo ? ';opacity:.6' : ''}">
+            <input type="checkbox" data-usu-proyecto="${esc(p.proyecto)}" data-usu-activo="${esc(a.activo_key)}" ${completo || ed.accesos.has(claveAcceso(p.proyecto, a.activo_key)) ? 'checked' : ''} ${completo || bloqueadoTodo ? 'disabled' : ''}>
+            <span>${esc(a.activo)}</span>${a.habilitado ? '' : '<span style="font-size:10px;color:var(--color-neutral-500)">(no habilitado)</span>'}
+          </label>`).join('')}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  detalle.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:4px">
+      <h5 style="margin:0">${esc(original.nombre || ed.id)}</h5>
+      <span style="font-size:12px;color:var(--color-neutral-500)">${esc(original.email || ed.id)}</span>
+    </div>
+    ${bloqueadoTodo ? '<p style="font-size:12px;color:var(--color-neutral-500);margin:0 0 12px">A un superadmin solo lo puede editar él mismo.</p>' : ''}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div class="field"><label>Nombre</label><input class="input" id="usu-edit-nombre" value="${esc(ed.nombre)}" ${bloqueadoTodo ? 'disabled' : ''}></div>
+      <div class="field"><label>Rol</label><select class="input" id="usu-edit-rol" ${puedeTocarRol && !bloqueadoTodo ? '' : 'disabled'}>${opcionesRol}</select></div>
+    </div>
+    ${!puedeTocarRol && !bloqueadoTodo ? '<p style="font-size:12px;color:var(--color-neutral-500);margin:6px 0 0">Solo un superadmin puede designar o revocar administradores.</p>' : ''}
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:12px 0 16px;cursor:pointer">
+      <input type="checkbox" id="usu-edit-habilitado" ${ed.habilitado ? 'checked' : ''} ${puedeDeshabilitar ? '' : 'disabled'}>
+      <span>Habilitado</span>
+      <span style="font-size:11px;color:var(--color-neutral-500)">${esSuperObjetivo ? '(el superadmin no se deshabilita)' : soyYo ? '(no podés deshabilitarte a vos mismo)' : 'deshabilitado = no puede entrar, pero conserva su historial'}</span>
+    </label>
+    <div style="font-size:11px;letter-spacing:0.04em;text-transform:uppercase;color:var(--color-neutral-500);margin-bottom:8px">Proyectos y activos</div>
+    ${grilla}
+    <p id="usu-edit-error" class="error" style="margin:12px 0 0" ${state.usuError ? '' : 'hidden'}>${esc(state.usuError || '')}</p>
+    <p style="margin:12px 0 0;font-size:13px;color:var(--color-accent-2-600)" ${state.usuExito ? '' : 'hidden'}>${esc(state.usuExito || '')}</p>
+    <button class="btn btn-primary" data-action="usu-guardar" style="margin-top:14px" ${bloqueadoTodo || state.usuGuardando ? 'disabled' : ''}>${state.usuGuardando ? 'Guardando…' : 'Guardar'}</button>`;
 }
 
 // ---------- Chequeo del mínimo de Meta antes de crear nada ----------
@@ -2090,7 +2683,11 @@ function fmtPeso(bytes) {
 // pieza genera más de un conjunto hace falta poder repartir antes de crear
 // — independiente de si ya se verificó el material o no.
 
-function claveCelda(objetivo, audCodigo) { return objetivo + "||" + audCodigo; }
+// Mismo formato de clave que combos_excluidos y que colaPautas.js del
+// servidor ("Objetivo|codigo_audiencia") — antes usaba "||" acá nomás, sin
+// motivo real (nada la parsea de vuelta, es una key opaca), así que quedaba
+// desalineada con lo que el servidor espera para leer el reparto a mano.
+function claveCelda(objetivo, audCodigo) { return objetivo + "|" + audCodigo; }
 
 // Misma regla que el servidor (services/colaPautas.js): parejo con dos
 // decimales y el resto a la última, para que dé 100 exacto y no 99,99.
@@ -2297,7 +2894,7 @@ function renderCsvSelectores() {
   const selP = document.getElementById('pd-csv-proyecto');
   selP.innerHTML = state.pdProyectos.map((p) => `<option value="${esc(p)}" ${p === state.pdProyecto ? 'selected' : ''}>${esc(p)}</option>`).join('');
   const selA = document.getElementById('pd-csv-activo');
-  selA.innerHTML = state.pdActivos.map((a) => `<option value="${esc(a.activo_key)}" ${a.activo_key === state.pdActivoKey ? 'selected' : ''}>${esc(a.proyecto)} — ${esc(a.activo)}</option>`).join('');
+  selA.innerHTML = state.pdActivos.map((a) => `<option value="${esc(a.activo_key)}" ${a.activo_key === state.pdActivoKey ? 'selected' : ''}>${esc(a.activo)}</option>`).join('');
 }
 
 async function cambiarProyectoCsv(valor) {
@@ -2519,15 +3116,29 @@ function renderFilaCsv(fila, i) {
 
 async function cambiarProyectoPd2(valor) {
   state.pd2Proyecto = valor;
+  // soloHabilitados=1 solo en modo "automatizado" — ver cargarActivosPedido.
+  const soloHabilitados = state.modoActivo === 'automatizado' ? '&soloHabilitados=1' : '';
   const [rActivos, campanas] = await Promise.all([
-    apiFetch(`/api/activos?proyecto=${encodeURIComponent(valor)}`),
+    apiFetch(`/api/activos?proyecto=${encodeURIComponent(valor)}${soloHabilitados}`),
     cargarCampanasSugeridas(valor),
   ]);
   state.pdActivos = rActivos.ok ? await rActivos.json() : [];
   state.pd2CampanasSugeridas = campanas;
-  const activoTest = state.pdActivos.find((a) => a.activo_key === 'test--tres-empanadas');
-  state.pd2ActivoKey = (activoTest || state.pdActivos[0] || {}).activo_key || null;
+  state.pd2ActivoKey = (state.pdActivos[0] || {}).activo_key || null;
+  state.pd2Posts = []; // activo distinto → los posts "Elegir publicación" ya no aplican
+  await cargarAudienciasPorActivo(state.pd2ActivoKey);
   renderTabPedido2();
+}
+
+// Se llama cada vez que cambia el Activo elegido en el Módulo 1 (ver el
+// listener de 'change' de #pd2-activo) — audiencias y posts son de ESE
+// activo, no de uno fijo.
+async function cambiarActivoPd2(valor) {
+  state.pd2ActivoKey = valor;
+  state.pd2Posts = [];
+  await cargarAudienciasPorActivo(valor);
+  renderTabPedido2();
+  actualizarPresupuestoPreviewPd2();
 }
 
 // Publicaciones recientes del activo — usadas por el selector "Elegir
@@ -2535,9 +3146,30 @@ async function cambiarProyectoPd2(valor) {
 // carga compartida por todas las piezas de la tanda.
 async function cargarPostsPedidoV2() {
   state.pd2CargandoPosts = true;
-  const r = await apiFetch('/api/publicaciones?activo_key=test--tres-empanadas');
+  const r = await apiFetch(`/api/publicaciones?activo_key=${encodeURIComponent(state.pd2ActivoKey || '')}`);
   state.pd2Posts = r.ok ? await r.json() : [];
   state.pd2CargandoPosts = false;
+}
+
+// "Pegar link" en Público: el link orgánico que se copia de un posteo (ej.
+// permalink.php?story_fbid=...&id=... o instagram.com/p/...) no es un
+// archivo descargable — nunca lo fue, verificarMaterial() siempre lo iba a
+// rechazar ("devolvió una página web"). Lo resuelve el servidor
+// (POST /api/publicaciones/resolver, ver metaContent.js:
+// resolverPostDesdeLink) contra la Graph API real — NO alcanza con
+// comparar el link a mano contra state.pd2Posts: el id que trae un link de
+// "Copiar enlace" (story_fbid, formato "pfbid...") no es comparable como
+// texto contra los id que devuelve /{page_id}/posts, son dos codificaciones
+// distintas del mismo posteo y solo Graph sabe traducir una a la otra.
+async function resolverPostDesdeLinkV2(link) {
+  const r = await apiFetch('/api/publicaciones/resolver', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ activo_key: state.pd2ActivoKey, link }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.detalle || data.error);
+  return data;
 }
 
 // Preview de los cruces Objetivo×Audiencia que va a generar el pedido —
@@ -2548,68 +3180,287 @@ async function cargarPostsPedidoV2() {
 // Lo que se destilda acá queda en pd2CombosExcluidos y viaja con el pedido:
 // ese cruce nunca se crea, ni el implementador lo ve después en Validación
 // (ver getMatrizParaPauta en colaPautas.js).
+// Reparto en DOS niveles (pedido explícito del usuario): primero qué % del
+// presupuesto va a cada Objetivo, y dentro de cada Objetivo cómo se reparte
+// ese % entre las Audiencias. El % final de cada conjunto de anuncios sale
+// de multiplicar los dos. Los pesos se guardan crudos y se normalizan a 100
+// recién al mostrar/mandar (normalizar100), así SIEMPRE suma 100 exacto por
+// más que se muevan sliders, se excluyan cruces o cambien Objetivo/Audiencia.
+function audienciasDelPd2() {
+  const audienciaEl = document.getElementById('pd2-audiencia');
+  const principal = audienciaEl ? audienciaEl.value : (state.pd2AudienciaCodigo || '');
+  const refuerzos = leerCheckboxes('pd2-refuerzo-chk');
+  const codigos = [principal].concat(refuerzos).filter(Boolean).filter((a, i, arr) => arr.indexOf(a) === i);
+  return codigos.map((codigo) => {
+    const a = (state.pdAudiencias || []).find((x) => x.codigo === codigo);
+    return {
+      codigo,
+      nombre: codigo === 'Otra' ? 'Otra (a mano)' : (a ? a.nombre : codigo),
+      manual: codigo === 'Otra',
+      principal: codigo === principal,
+    };
+  });
+}
+
+function combosDelPd2() {
+  const objetivos = leerCheckboxes('pd2-objetivo-chk');
+  const auds = audienciasDelPd2();
+  const combos = [];
+  objetivos.forEach((objetivo) => auds.forEach((a) => combos.push({
+    objetivo, audCodigo: a.codigo, audNombre: a.nombre, manual: a.manual, principal: a.principal,
+  })));
+  return combos;
+}
+
+function pesosParejos(claves) {
+  const mapa = {};
+  claves.forEach((k) => { mapa[k] = 100 / (claves.length || 1); });
+  return mapa;
+}
+
+// Si cambió la "forma" (otros Objetivos u otras Audiencias), el reparto
+// anterior ya no aplica: se vuelve a parejo en los dos niveles.
+function asegurarRepartoPd2() {
+  const objetivos = leerCheckboxes('pd2-objetivo-chk');
+  const auds = audienciasDelPd2();
+  const firma = objetivos.join('~') + '||' + auds.map((a) => a.codigo).join('~');
+  if (state.pd2RepartoFirma === firma && state.pd2RepartoObjetivo) return;
+  state.pd2RepartoFirma = firma;
+  state.pd2RepartoObjetivo = pesosParejos(objetivos);
+  state.pd2RepartoAud = {};
+  objetivos.forEach((o) => { state.pd2RepartoAud[o] = pesosParejos(auds.map((a) => a.codigo)); });
+  state.pd2CombosExcluidos = {};
+}
+
+// Pasa pesos crudos a porcentajes que suman 100 EXACTO (el resto del
+// redondeo va a la última clave, mismo criterio que el servidor).
+function normalizar100(pesos, claves) {
+  const mapa = {};
+  if (!claves.length) return mapa;
+  const total = claves.reduce((a, k) => a + (Number(pesos[k]) || 0), 0);
+  let acum = 0;
+  claves.forEach((k, i) => {
+    if (i === claves.length - 1) { mapa[k] = +(100 - acum).toFixed(2); return; }
+    const v = total > 0
+      ? +(((Number(pesos[k]) || 0) * 100) / total).toFixed(2)
+      : +(100 / claves.length).toFixed(2);
+    mapa[k] = v;
+    acum = +(acum + v).toFixed(2);
+  });
+  return mapa;
+}
+
+// Mueve un slider dejando el resto proporcional a lo que ya tenía, para que
+// el nivel siga cerrando en 100 sin tener que tocar los demás a mano.
+function moverPeso(pesos, claves, claveMovida, valor) {
+  const v = Math.max(0, Math.min(100, valor));
+  const otros = claves.filter((k) => k !== claveMovida);
+  const nuevo = {};
+  nuevo[claveMovida] = v;
+  const restante = Math.max(0, 100 - v);
+  const pesoAnterior = otros.reduce((a, k) => a + (Number(pesos[k]) || 0), 0);
+  otros.forEach((k) => {
+    nuevo[k] = pesoAnterior > 0
+      ? (restante * (Number(pesos[k]) || 0)) / pesoAnterior
+      : restante / (otros.length || 1);
+  });
+  return nuevo;
+}
+
+// Única fuente de verdad de los porcentajes: la usan tanto el render como el
+// envío, así lo que se ve en pantalla es exactamente lo que se manda.
+function repartoResueltoPd2() {
+  asegurarRepartoPd2();
+  const objetivos = leerCheckboxes('pd2-objetivo-chk');
+  const auds = audienciasDelPd2();
+  const activasDe = (obj) => auds.filter((a) => !state.pd2CombosExcluidos[obj + '|' + a.codigo]);
+  const objetivosActivos = objetivos.filter((o) => activasDe(o).length > 0);
+  const pctObjetivo = normalizar100(state.pd2RepartoObjetivo || {}, objetivosActivos);
+  return objetivos.map((obj) => {
+    const activas = activasDe(obj);
+    const pctAud = normalizar100((state.pd2RepartoAud || {})[obj] || {}, activas.map((a) => a.codigo));
+    const pctObj = pctObjetivo[obj] || 0;
+    return {
+      objetivo: obj,
+      activo: objetivosActivos.indexOf(obj) !== -1,
+      pct: pctObj,
+      audiencias: auds.map((a) => {
+        const excluida = !!state.pd2CombosExcluidos[obj + '|' + a.codigo];
+        const pctEnObjetivo = excluida ? 0 : (pctAud[a.codigo] || 0);
+        return Object.assign({}, a, {
+          excluida,
+          pctEnObjetivo,
+          pctTotal: +((pctObj * pctEnObjetivo) / 100).toFixed(2),
+        });
+      }),
+    };
+  });
+}
+
+// {"Objetivo|codigo_audiencia": pct} — formato que espera el servidor
+// (getMatrizParaPauta en colaPautas.js).
+function repartoPlanoPd2() {
+  const mapa = {};
+  repartoResueltoPd2().forEach((f) => {
+    if (!f.activo) return;
+    // Una celda en 0% no se manda: sería un conjunto de anuncios sin plata,
+    // que Meta rechaza igual. Va como excluida (ver excluidosParaEnvioPd2),
+    // así el servidor ve las mismas celdas en el reparto y en los excluidos.
+    f.audiencias.forEach((a) => { if (!a.excluida && a.pctTotal > 0) mapa[f.objetivo + '|' + a.codigo] = a.pctTotal; });
+  });
+  const claves = Object.keys(mapa);
+  if (claves.length) {
+    const suma = claves.reduce((a, k) => a + mapa[k], 0);
+    const ultima = claves[claves.length - 1];
+    mapa[ultima] = +(mapa[ultima] + (100 - suma)).toFixed(2);
+  }
+  return mapa;
+}
+
+// Excluidos que viajan con el pedido: los destildados a mano MÁS los que
+// quedaron en 0% moviendo los sliders — para el servidor son lo mismo (ese
+// cruce no se crea).
+function excluidosParaEnvioPd2() {
+  const fuera = Object.assign({}, state.pd2CombosExcluidos);
+  repartoResueltoPd2().forEach((f) => f.audiencias.forEach((a) => {
+    if (!f.activo || a.pctTotal <= 0) fuera[f.objetivo + '|' + a.codigo] = true;
+  }));
+  return Object.keys(fuera);
+}
+
+// "Pedido de Pauta" nunca elige el presupuesto a mano — se lo pide al
+// servidor (mismo cálculo que va a usar al confirmar) solo para poder
+// mostrar montos mientras se mueven los sliders.
+async function actualizarPresupuestoPreviewPd2() {
+  if (state.pd2ModoDirecto) return;
+  const activoKey = state.pd2ActivoKey;
+  const tipoCodigo = state.pd2TipoCodigo;
+  const audEl = document.getElementById('pd2-audiencia');
+  const audienciaCodigo = audEl ? audEl.value : state.pd2AudienciaCodigo;
+  if (!activoKey || !tipoCodigo || !audienciaCodigo) { state.pd2PresupuestoPreview = null; return; }
+  try {
+    const r = await apiFetch(`/api/presupuesto-preview?activoKey=${encodeURIComponent(activoKey)}&tipoCodigo=${encodeURIComponent(tipoCodigo)}&audienciaCodigo=${encodeURIComponent(audienciaCodigo)}`);
+    const data = r.ok ? await r.json() : { presupuesto: null };
+    state.pd2PresupuestoPreview = data.presupuesto;
+  } catch (e) {
+    state.pd2PresupuestoPreview = null;
+  }
+  renderCrucesV2();
+}
+
+function sliderReparto(accion, datos, valor, deshabilitado) {
+  return '<input type="range" min="0" max="100" step="1" value="' + Math.round(valor) + '" ' + (deshabilitado ? 'disabled ' : '')
+    + 'data-action="' + accion + '" ' + datos
+    + ' style="flex:1;min-width:90px;accent-color:var(--color-accent)' + (deshabilitado ? ';opacity:.4' : '') + '">';
+}
+
 function renderCrucesV2() {
   const wrap = document.getElementById('pd2-cruces-wrap');
   if (!wrap) return;
-  const objetivos = leerCheckboxes('pd2-objetivo-chk');
-  const audienciaEl = document.getElementById('pd2-audiencia');
-  const principal = audienciaEl ? audienciaEl.value : '';
-  const refuerzo = leerCheckboxes('pd2-refuerzo-chk');
-  const codigos = [principal, ...refuerzo].filter(Boolean);
-  const audienciasUnicas = codigos.filter((c, i) => codigos.indexOf(c) === i);
+  const filas = repartoResueltoPd2();
+  const totalCombos = filas.reduce((a, f) => a + f.audiencias.length, 0);
 
-  if (objetivos.length * audienciasUnicas.length <= 1) {
+  if (totalCombos <= 1) {
     wrap.hidden = true;
     wrap.innerHTML = '';
     return;
   }
-  const nombreAud = (cod) => {
-    if (cod === 'Otra') return 'Otra';
-    const a = (state.pdAudiencias || []).find((x) => x.codigo === cod);
-    return a ? a.nombre : cod;
-  };
-  const celda = (obj, cod) => {
-    const clave = obj + '|' + cod;
-    const excluido = !!state.pd2CombosExcluidos[clave];
-    return '<td style="text-align:center;padding:6px 10px;border:1px solid var(--color-divider)' + (excluido ? ';opacity:.4' : '') + '">'
-      + '<input type="checkbox" ' + (excluido ? '' : 'checked') + ' data-action="pd2-toggle-cruce" data-clave="' + esc(clave) + '" style="width:14px;height:14px;accent-color:var(--color-accent)">'
-      + '</td>';
-  };
-  const cabecera = '<th style="padding:6px 10px;border:1px solid var(--color-divider)"></th>'
-    + audienciasUnicas.map((cod) => '<th style="padding:6px 10px;border:1px solid var(--color-divider);font-size:12px;font-weight:400;color:var(--color-neutral-400)">' + esc(nombreAud(cod)) + '</th>').join('');
-  const filas = objetivos.map((obj) => '<tr>'
-    + '<th style="padding:6px 10px;border:1px solid var(--color-divider);font-size:12px;font-weight:400;color:var(--color-neutral-400);text-align:left;white-space:nowrap">' + esc(obj) + '</th>'
-    + audienciasUnicas.map((cod) => celda(obj, cod)).join('')
-    + '</tr>').join('');
+
+  const presupuesto = state.pd2ModoDirecto
+    ? (Number((document.getElementById('pd2-presupuesto-default') || {}).value || 0) || 0)
+    : (state.pd2PresupuestoPreview || 0);
+  const dias = diasDeLaPieza(
+    (document.getElementById('pd2-fecha-inicio') || {}).value || '',
+    (document.getElementById('pd2-fecha-fin') || {}).value || ''
+  );
+  const minDiario = state.limites && state.limites.minDiario;
+  const minPorConjunto = minDiario ? minDiario * dias : 0;
+  const montoDe = (pct) => Math.round((presupuesto * pct) / 100);
+
+  const bloques = filas.map((f) => {
+    const audHtml = f.audiencias.map((a) => {
+      const monto = montoDe(a.pctTotal);
+      const bajoMinimo = !a.manual && !a.excluida && minPorConjunto && a.pctTotal > 0 && monto < minPorConjunto;
+      const datos = 'data-objetivo="' + esc(f.objetivo) + '" data-aud="' + esc(a.codigo) + '"';
+      return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0' + (a.excluida ? ';opacity:.45' : '') + '">'
+        + '<input type="checkbox" ' + (a.excluida ? '' : 'checked') + ' title="Incluir este conjunto" data-action="pd2-excluir-cruce" ' + datos + ' style="width:15px;height:15px;accent-color:var(--color-accent);flex:none">'
+        + '<div class="row-ellip" style="width:180px;flex:none;font-size:12px;color:var(--color-neutral-400)">' + esc(a.nombre)
+        +   (a.manual ? ' <span class="tag tag-outline" style="font-size:10px">a mano</span>' : '')
+        + '</div>'
+        + sliderReparto('pd2-aud-slider', datos, a.pctEnObjetivo, a.excluida || !f.activo)
+        + '<div style="width:118px;flex:none;text-align:right">'
+        +   '<div style="font-family:var(--font-heading);font-size:13px">' + a.pctEnObjetivo + '% <span style="color:var(--color-neutral-500);font-size:11px">(' + a.pctTotal + '% del total)</span></div>'
+        +   (presupuesto ? '<div style="font-size:11px;color:' + (bajoMinimo ? 'var(--color-warning, #d08a1e)' : 'var(--color-neutral-500)') + '">' + esc(fmtMoney(monto)) + '</div>' : '')
+        + '</div>'
+        + '</div>';
+    }).join('');
+
+    return '<div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:12px 14px' + (f.activo ? '' : ';opacity:.5') + '">'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">'
+      +   '<div style="width:195px;flex:none;font-family:var(--font-heading);font-size:14px">' + esc(f.objetivo) + '</div>'
+      +   sliderReparto('pd2-obj-slider', 'data-objetivo="' + esc(f.objetivo) + '"', f.pct, !f.activo)
+      +   '<div style="width:118px;flex:none;text-align:right">'
+      +     '<div style="font-family:var(--font-heading);font-size:16px">' + f.pct + '%</div>'
+      +     (presupuesto ? '<div style="font-size:11px;color:var(--color-neutral-500)">' + esc(fmtMoney(montoDe(f.pct))) + '</div>' : '')
+      +   '</div>'
+      + '</div>'
+      + '<div style="border-top:1px solid var(--color-divider);padding-top:4px;margin-left:12px">' + audHtml + '</div>'
+      + '</div>';
+  }).join('');
+
+  const flojas = filas.reduce((acc, f) => acc + f.audiencias.filter((a) => (
+    !a.manual && !a.excluida && f.activo && minPorConjunto && a.pctTotal > 0 && montoDe(a.pctTotal) < minPorConjunto
+  )).length, 0);
+
   wrap.hidden = false;
   wrap.innerHTML = '<div class="field" style="margin-top:12px">'
-    + '<label>Se van a crear estos cruces <span style="font-weight:400;color:var(--color-neutral-500)">(destildá para no crear alguno)</span></label>'
-    + '<div style="overflow-x:auto"><table style="border-collapse:collapse;font-family:var(--font-heading)">'
-    + '<thead><tr>' + cabecera + '</tr></thead><tbody>' + filas + '</tbody>'
-    + '</table></div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+    +   '<label style="margin:0">Distribución de la inversión <span style="font-weight:400;color:var(--color-neutral-500)">(% por Objetivo, y dentro de cada uno, % por Audiencia)</span></label>'
+    +   '<button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px" data-action="pd2-reparto-parejo"><i class="ph ph-equals"></i> Repartir parejo</button>'
+    + '</div>'
+    + '<div style="display:flex;flex-direction:column;gap:10px">' + bloques + '</div>'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:13px;font-family:var(--font-heading)">'
+    +   '<span style="color:var(--color-accent-300)">Total: 100%</span>'
+    +   (presupuesto ? '<span>' + esc(fmtMoney(presupuesto)) + '</span>' : '<span style="color:var(--color-neutral-500)">Presupuesto: se calcula al confirmar</span>')
+    + '</div>'
+    + (flojas ? '<div style="font-size:12px;color:var(--color-neutral-300);margin-top:8px;padding:8px 10px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md)"><strong>' + flojas + ' conjunto(s) bajo el mínimo de Meta.</strong> Para ' + dias + ' día(s) Meta pide más de ' + esc(fmtMoney(minPorConjunto)) + ' por conjunto: si lo pedís así, va a rechazar esos.</div>' : '')
     + '</div>';
 }
 
+// "Oficial" / "Informativo" / "Oficial + Informativo" (admin con "Ver ambos").
+function etiquetaEcosistema() {
+  if (state.ecosistemaActivo === 'TODOS') return 'Oficial + Informativo';
+  return state.ecosistemaActivo || '';
+}
+function claseEcosistema() {
+  if (state.ecosistemaActivo === 'Oficial') return 'eco-oficial';
+  if (state.ecosistemaActivo === 'Informativo') return 'eco-informativo';
+  return 'eco-todos';
+}
+
 function renderTabPedido2() {
-  document.getElementById('pd2-titulo').textContent = state.pd2ModoDirecto ? 'Crear Anuncio' : 'Pedido de Anuncios';
+  // Título con la marca de ecosistema y el proyecto (pedido del usuario:
+  // "que se sepa desde la interfaz", ej. "Pedido de Anuncios — INFORMATIVO ·
+  // Gobierno del Chubut") + franja de color en el panel.
+  const base = state.pd2ModoDirecto ? 'Crear Anuncio' : 'Pedido de Anuncios';
+  const proyectoTitulo = state.proyectoActivo === 'TODOS' ? 'Todos los proyectos' : (state.proyectoActivo || '');
+  document.getElementById('pd2-titulo').innerHTML = esc(base)
+    + ' <span class="eco-chip ' + claseEcosistema() + '" style="vertical-align:middle;margin:0 6px">' + esc(etiquetaEcosistema()) + '</span>'
+    + '<span style="font-weight:400;color:var(--color-neutral-500)">· ' + esc(proyectoTitulo) + '</span>'
+    + (proyectoSoloInformativo() ? '<div style="font-size:12px;font-weight:400;color:var(--color-warning, #d08a1e);margin-top:4px"><i class="ph ph-info"></i> ' + esc(LEYENDA_SOLO_INFORMATIVO) + '</div>' : '');
+  const panelPedido = document.querySelector('#tab-pedido2 > .expand-panel');
+  if (panelPedido) { panelPedido.classList.remove('eco-oficial', 'eco-informativo', 'eco-todos'); panelPedido.classList.add(claseEcosistema()); }
   document.getElementById('pd2-card-anuncios-titulo').textContent = state.pd2ModoDirecto ? 'Crear Anuncios' : 'Pedido de Anuncios';
   document.getElementById('pd2-modo-carga-anuncios-label').textContent = state.pd2ModoDirecto ? 'Crear Anuncios' : 'Pedido de Anuncios';
 
   if (!state.pd2Proyecto) state.pd2Proyecto = state.pdProyecto || state.pdProyectos[0] || null;
-  if (!state.pd2ActivoKey) {
-    const activoTest = state.pdActivos.find((a) => a.activo_key === 'test--tres-empanadas');
-    state.pd2ActivoKey = (activoTest || state.pdActivos[0] || {}).activo_key || null;
-  }
+  // Fallback sincrónico si por algún motivo todavía no se eligió Activo acá
+  // (el camino normal ya lo hace en cargarActivosPedido/cambiarProyectoPd2,
+  // que además disparan la carga de audiencias de ESE activo — este
+  // fallback no lo hace, es solo para no dejar el <select> vacío).
+  if (!state.pd2ActivoKey) state.pd2ActivoKey = (state.pdActivos[0] || {}).activo_key || null;
   if (!state.pd2EjeCodigo && state.pdEjes.length) state.pd2EjeCodigo = null;
   if (!state.pdTipos.find((t) => t.codigo === state.pd2TipoCodigo)) state.pd2TipoCodigo = (state.pdTipos[0] || {}).codigo || null;
-
-  const notaActivoEl = document.getElementById('pd2-activo-nota');
-  notaActivoEl.textContent = state.pd2ActivoKey === 'test--tres-empanadas'
-    ? ''
-    : 'Se ejecuta sobre Tres Empanadas (sandbox) — este activo queda de registro.';
-  notaActivoEl.title = state.pd2ActivoKey === 'test--tres-empanadas'
-    ? ''
-    : 'Por ahora, toda pauta se ejecuta igual sobre Tres Empanadas (sandbox) — este activo queda de registro hasta que se habilite el resto.';
 
   // Fecha de inicio arranca en hoy — se completa una sola vez ("no se puede
   // editar en AppSheet tampoco"), después el campo queda libre.
@@ -2624,7 +3475,13 @@ function renderTabPedido2() {
   document.getElementById('pd2-modulos-wrap').hidden = state.pd2ModoCarga !== 'anuncios';
   document.querySelectorAll('#pd2-modo-carga-wrap [data-action="pd2-modo-carga"]').forEach((b) => b.classList.toggle('active', b.dataset.id === state.pd2ModoCarga));
   renderResultadoFinalV2();
-  if (state.pd2ModoCarga !== 'anuncios') return;
+  if (state.pd2ModoCarga !== 'anuncios') { document.getElementById('pd2-plataforma-elegir').hidden = true; return; }
+
+  // Paso previo: la cuadrícula de plataformas. Hasta confirmar, los
+  // módulos quedan ocultos.
+  document.getElementById('pd2-plataforma-elegir').hidden = state.pd2PlataformaElegida;
+  document.getElementById('pd2-modulos-wrap').hidden = !state.pd2PlataformaElegida;
+  if (!state.pd2PlataformaElegida) { renderGrillaPlataformas(); return; }
 
   document.getElementById('pd2-bulk-crear').hidden = !state.pd2BulkItems.length;
   document.getElementById('pd2-cantidad-piezas').value = String(state.pd2BulkItems.length || 1);
@@ -2643,20 +3500,31 @@ function renderTabPedido2() {
       PRESUPUESTO_TIERS.map((v) => `<option value="${v}" ${String(v) === presupuestoDefaultPrevio ? 'selected' : ''}>${labelPresupuesto(v)}</option>`).join('');
   }
 
+  // Plataforma(s) elegidas en la cuadrícula — resumen arriba del Módulo 1
+  // con la opción de volver a elegir.
+  const platInfo = plataformaPd2Actual();
+  const esMetaPd2 = platInfo.esMeta;
+  document.getElementById('pd2-plataforma-resumen').innerHTML =
+    '<span style="color:var(--color-neutral-500)">Plataforma' + (state.pd2Plataformas.length > 1 ? 's' : '') + ':</span> '
+    + state.pd2Plataformas.map((n) => '<span class="tag"><i class="ph ' + esc(iconoPlataforma(n)) + '"></i> ' + esc(n) + '</span>').join('')
+    + ' <button type="button" class="btn btn-ghost" data-action="pd2-plataforma-cambiar" style="font-size:12px;padding:2px 6px">cambiar</button>';
+
   const selProy2 = document.getElementById('pd2-proyecto');
   selProy2.innerHTML = state.pdProyectos.map((p) => `<option value="${esc(p)}" ${p === state.pd2Proyecto ? 'selected' : ''}>${esc(p)}</option>`).join('');
   // Ya se eligió el Proyecto en el onboarding — acá queda fijo, mismo
   // criterio que "pd-proyecto" en v1 (ver proyectosDisponiblesBloqueado).
   selProy2.disabled = state.proyectosDisponiblesBloqueado;
-  document.getElementById('pd2-activo').innerHTML = state.pdActivos.map((a) => `<option value="${esc(a.activo_key)}" ${a.activo_key === state.pd2ActivoKey ? 'selected' : ''}>${esc(a.proyecto)} — ${esc(a.activo)}</option>`).join('');
-  document.getElementById('pd2-tipo').innerHTML = state.pdTipos.map((t) => `<option value="${esc(t.codigo)}" ${t.codigo === state.pd2TipoCodigo ? 'selected' : ''}>${esc(t.nombre)} (${esc(t.ecosistema)})</option>`).join('');
+  document.getElementById('pd2-activo').innerHTML = state.pdActivos.map((a) => `<option value="${esc(a.activo_key)}" ${a.activo_key === state.pd2ActivoKey ? 'selected' : ''}>${esc(a.activo)}</option>`).join('');
+  document.getElementById('pd2-tipo').innerHTML = state.pdTipos.map((t) => `<option value="${esc(t.codigo)}" ${t.codigo === state.pd2TipoCodigo ? 'selected' : ''}>${esc(t.nombre)}</option>`).join('');
   document.getElementById('pd2-eje').innerHTML = '<option value="">— elegir —</option>' + state.pdEjes.map((e) => `<option value="${esc(e.codigo)}" ${e.codigo === state.pd2EjeCodigo ? 'selected' : ''}>${esc(e.eje)}</option>`).join('');
 
   // El tildado vive en el DOM, no en state.pd2Objetivo (nunca se sincroniza
   // ahí) — hay que leerlo antes de reconstruir el dropdown o cada render
   // (ej. "Confirmar y seguir") lo pisaba con el array vacío inicial.
   const objetivoPrevio = leerCheckboxes('pd2-objetivo-chk');
-  document.getElementById('pd2-objetivo-wrap').innerHTML = renderDropdownMulti('pd2-objetivo-dd', 'pd2-objetivo-chk', state.pdObjetivos.map((o) => [o, o]), '— elegir uno o más —', objetivoPrevio);
+  // Otra plataforma: solo sus objetivos (ver src/config/plataformas.js).
+  const objetivosPd2 = platInfo.objetivos ? state.pdObjetivos.filter((o) => platInfo.objetivos.includes(o)) : state.pdObjetivos;
+  document.getElementById('pd2-objetivo-wrap').innerHTML = renderDropdownMulti('pd2-objetivo-dd', 'pd2-objetivo-chk', objetivosPd2.map((o) => [o, o]), '— elegir uno o más —', objetivoPrevio.filter((o) => objetivosPd2.includes(o)));
   document.getElementById('pd2-audiencia-wrap').innerHTML = renderAudienciaSelect('pd2-audiencia', state.pdAudiencias, state.pd2AudienciaCodigo);
   document.getElementById('pd2-otra-audiencia-wrap').hidden = state.pd2AudienciaCodigo !== 'Otra';
   const refuerzoPrevio = leerCheckboxes('pd2-refuerzo-chk');
@@ -2664,14 +3532,47 @@ function renderTabPedido2() {
   document.getElementById('pd2-otras-refuerzo-wrap').hidden = !refuerzoPrevio.includes('Otra');
   renderCrucesV2();
 
-  document.getElementById('pd2-visibilidad').value = state.pd2Visibilidad;
+  // Otra plataforma que Meta: no hay "Público" (publicación existente), ni
+  // Red ni Placement — la pieza se carga a mano en esa plataforma.
+  if (!esMetaPd2 && state.pd2Visibilidad !== 'DARK') state.pd2Visibilidad = 'DARK';
+  const selVis = document.getElementById('pd2-visibilidad');
+  selVis.value = state.pd2Visibilidad;
+  selVis.disabled = !esMetaPd2;
   document.getElementById('pd2-formato-wrap').hidden = state.pd2Visibilidad !== 'DARK';
   const formatoPrevio = document.getElementById('pd2-formato') ? document.getElementById('pd2-formato').value : '';
-  document.getElementById('pd2-formato').innerHTML = state.pdFormatos.map((f) => `<option value="${esc(f.appsheet_valor)}" ${f.appsheet_valor === formatoPrevio ? 'selected' : ''}>${esc(f.appsheet_valor)}</option>`).join('');
+  const formatosPd2 = formatosPd2Disponibles();
+  document.getElementById('pd2-formato').innerHTML = formatosPd2.map((f) => `<option value="${esc(f.appsheet_valor)}" ${f.appsheet_valor === formatoPrevio ? 'selected' : ''}>${esc(f.appsheet_valor)}</option>`).join('');
   const formatoElegido = document.getElementById('pd2-formato').value;
-  const formatoInfoActual = state.pdFormatos.find((f) => f.appsheet_valor === formatoElegido);
+  const formatoInfoActual = formatosPd2.find((f) => f.appsheet_valor === formatoElegido);
+  const ayudaFormato = document.getElementById('pd2-formato-ayuda');
+  ayudaFormato.hidden = !platInfo.ayudaMaterial;
+  ayudaFormato.textContent = platInfo.ayudaMaterial || '';
+  document.getElementById('pd2-redes-wrap').hidden = !esMetaPd2;
+  document.getElementById('pd2-placements-field').hidden = !esMetaPd2;
   const bloqueadoEnFeed = state.pd2Visibilidad === 'PUBLICO';
-  document.getElementById('pd2-placements-wrap').innerHTML = renderPlacementsCheckboxes(bloqueadoEnFeed ? ['feed'] : state.pd2Placements, formatoInfoActual, false, bloqueadoEnFeed, 'pd2-placement-chk');
+  // Placement arranca con Feed elegido (pedido del usuario 2026-09-12: "que
+  // arranque eligiendo uno") — antes quedaba vacío y frenaba el módulo.
+  if (esMetaPd2 && !bloqueadoEnFeed && !state.pd2Placements.length) state.pd2Placements = ['feed'];
+  if (esMetaPd2) {
+    document.getElementById('pd2-placements-wrap').innerHTML = renderPlacementsCheckboxes(bloqueadoEnFeed ? ['feed'] : state.pd2Placements, formatoInfoActual, false, bloqueadoEnFeed, 'pd2-placement-chk');
+    // Medidas recomendadas de los placements elegidos (specs del equipo) —
+    // ayuda ANTES de cargar la pieza; el chequeo real es al verificar.
+    const medidasHint = dimensionRecomendada(bloqueadoEnFeed ? ['feed'] : (state.pd2Placements.length ? state.pd2Placements : ['feed']));
+    if (medidasHint) {
+      document.getElementById('pd2-placements-wrap').insertAdjacentHTML('beforeend', '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:6px">Medidas: ' + esc(medidasHint) + '</div>');
+    }
+  }
+  // Categoría de pieza (por Formato) y Gobernador: solo Pedido Normal.
+  const esNormalPd2 = state.modoActivo !== 'automatizado';
+  const categorias = esNormalPd2 && state.pd2Visibilidad === 'DARK' ? ((platInfo.categorias || {})[formatoElegido] || []) : [];
+  const selCat = document.getElementById('pd2-categoria-pieza');
+  const catPrevia = selCat.value;
+  document.getElementById('pd2-categoria-wrap').hidden = !categorias.length;
+  selCat.innerHTML = '<option value="">— sin definir —</option>' + categorias.map((c) => `<option value="${esc(c)}" ${c === catPrevia ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  document.getElementById('pd2-gobernador-wrap').hidden = !esNormalPd2;
+  document.getElementById('pd2-link-destino-hint').textContent = platInfo.requiereLink
+    ? `(obligatorio en ${platInfo.nombre})`
+    : '(opcional, obligatorio con Objetivo Tráfico)';
 
   // Red: 2-3 checkboxes sueltos, libres — mismo criterio que "pd-redes-inner"
   // en v1 (que tampoco los bloquea contra la publicación elegida por pieza:
@@ -2697,13 +3598,23 @@ function renderTabPedido2() {
 
 function moduloValido(n) {
   if (n === 1) {
-    if (!state.pd2Proyecto || !state.pd2ActivoKey || !state.pd2TipoCodigo || !state.pd2EjeCodigo) return 'Completá Proyecto, Activo, Tipo y Eje.';
-    if (!document.getElementById('pd2-campana').value.trim()) return 'Falta la Campaña.';
-    if (!leerCheckboxes('pd2-objetivo-chk').length) return 'Elegí al menos un Objetivo.';
+    // Nombra solo lo que falta (antes decía "Completá Proyecto, Activo, Tipo
+    // y Eje" aunque solo faltara el Eje).
+    const faltan = [];
+    if (!state.pd2Proyecto) faltan.push('el Proyecto');
+    if (!state.pd2ActivoKey) faltan.push('el Activo');
+    if (!state.pd2TipoCodigo) faltan.push('el Tipo');
+    if (!state.pd2EjeCodigo) faltan.push('el Eje');
+    if (!document.getElementById('pd2-campana').value.trim()) faltan.push('la Campaña');
+    if (!leerCheckboxes('pd2-objetivo-chk').length) faltan.push('al menos un Objetivo');
+    if (faltan.length === 1) return 'Falta ' + faltan[0] + '.';
+    if (faltan.length > 1) return 'Falta ' + faltan.slice(0, -1).join(', ') + ' y ' + faltan[faltan.length - 1] + '.';
     return null;
   }
   if (n === 2) {
     if (!document.getElementById('pd2-audiencia').value) return 'Elegí la Audiencia principal.';
+    // El reparto siempre cierra en 100 solo (se normaliza en
+    // repartoResueltoPd2), así que acá no hace falta validar la suma.
     return null;
   }
   if (n === 3) {
@@ -2711,8 +3622,10 @@ function moduloValido(n) {
     return null;
   }
   if (n === 4) {
+    const plat = plataformaPd2Actual();
     if (state.pd2Visibilidad === 'DARK' && !document.getElementById('pd2-formato').value) return 'Elegí el Formato.';
-    if (state.pd2Visibilidad === 'DARK' && !state.pd2Placements.length) return 'Elegí al menos un Placement.';
+    if (plat.esMeta && state.pd2Visibilidad === 'DARK' && !state.pd2Placements.length) return 'Elegí al menos un Placement.';
+    if (plat.requiereLink && !document.getElementById('pd2-link-destino').value.trim()) return `En ${plat.nombre} el Link de destino es obligatorio.`;
     return null;
   }
   return null;
@@ -2747,6 +3660,9 @@ function invalidarPreviewsPiezasV2() {
 // Anuncios" arranca siempre con 1 pieza (el Módulo 4 deja subirla hasta 10).
 function cambiarModoCargaV2(modo) {
   state.pd2ModoCarga = modo;
+  // "Ni bien toca Pedido de Anuncios": la cuadrícula de plataformas se
+  // pregunta siempre al entrar (queda lo elegido la última vez como default).
+  if (modo === 'anuncios') state.pd2PlataformaElegida = false;
   if (modo === 'csv') {
     renderCsvSelectores();
     renderTabPedido2();
@@ -2834,7 +3750,94 @@ function reiniciarMaterialesPiezasV2() {
 function formatoInfoPd2Actual() {
   const formatoEl = document.getElementById('pd2-formato');
   const valor = formatoEl ? formatoEl.value : '';
-  return state.pdFormatos.find((f) => f.appsheet_valor === valor);
+  return formatosPd2Disponibles().find((f) => f.appsheet_valor === valor);
+}
+
+const ICONO_PLATAFORMA = { Meta: 'ph-meta-logo', Youtube: 'ph-youtube-logo', 'Tik Tok': 'ph-tiktok-logo', X: 'ph-x-logo', Display: 'ph-monitor' };
+function iconoPlataforma(nombre) { return ICONO_PLATAFORMA[nombre] || 'ph-megaphone'; }
+const FORMATO_GENERICO_UI = { imagen: 'Imagen', video: 'Video', carrusel: 'Carrusel' };
+
+// Las plataformas elegidas, combinadas en una sola "vista" — mismo criterio
+// que combinarPlataformas() en el server: con una sola, sus formatos/
+// objetivos; con varias, los formatos genéricos (Imagen/Video/Carrusel)
+// que TODAS soportan y la intersección de objetivos; link obligatorio o
+// "solo video" si alguna lo exige. esMeta = Meta y nada más (la única que
+// tiene Red/Placement/Público/preview real).
+function plataformaPd2Actual() {
+  const infos = state.pd2Plataformas.map((n) => state.pdPlataformas.find((p) => p.nombre === n)).filter(Boolean);
+  if (!infos.length) return { nombres: ['Meta'], nombre: 'Meta', esMeta: true, formatos: null, objetivos: null, requiereLink: false, soloVideo: false, ayudaMaterial: '', categorias: {} };
+  const nombres = infos.map((p) => p.nombre);
+  const esMeta = nombres.length === 1 && nombres[0] === 'Meta';
+  let formatos;
+  if (nombres.length === 1) {
+    formatos = infos[0].formatos ? infos[0].formatos.map((f) => ({ appsheet_valor: f, modo: (infos[0].modos || {})[f] || 'imagen' })) : null;
+  } else {
+    formatos = ['imagen', 'video', 'carrusel']
+      .filter((m) => infos.every((p) => Object.values(p.modos || {}).includes(m)))
+      .map((m) => ({ appsheet_valor: FORMATO_GENERICO_UI[m], modo: m }));
+  }
+  const conObjetivos = infos.filter((p) => p.objetivos);
+  const objetivos = conObjetivos.length ? conObjetivos[0].objetivos.filter((o) => conObjetivos.every((p) => p.objetivos.includes(o))) : null;
+  // Categorías de pieza: las de Meta si está (tiene Imagen/Video/Carrusel), si no las de la primera.
+  const fuenteCat = infos.find((p) => p.nombre === 'Meta') || infos[0];
+  return {
+    nombres, nombre: nombres.join(', '), esMeta, formatos, objetivos,
+    requiereLink: infos.some((p) => p.requiereLink),
+    soloVideo: infos.some((p) => p.soloVideo),
+    ayudaMaterial: infos.map((p) => p.ayudaMaterial).filter(Boolean).join(' '),
+    categorias: fuenteCat.categorias || {},
+  };
+}
+
+// Meta sola: los de equiv_formato (con modo imagen/video/carrusel). Otra
+// cosa: la lista combinada, con el mismo shape para que el resto del
+// formulario (carrusel, preview) no tenga que distinguir.
+function formatosPd2Disponibles() {
+  const plat = plataformaPd2Actual();
+  return plat.formatos || state.pdFormatos;
+}
+
+// Cuadrícula de plataformas (logos, multipick). En Automatizado solo Meta
+// está habilitada (el server ya devuelve solo Meta en ese modo).
+function renderGrillaPlataformas() {
+  asegurarPendientesDetalle(renderGrillaPlataformas);
+  const lista = state.pdPlataformas.length ? state.pdPlataformas : [{ nombre: 'Meta', habilitada: true }];
+  document.getElementById('pd2-plataforma-eyebrow').textContent = etiquetaEcosistema() + ' · ' + (state.proyectoActivo === 'TODOS' ? 'Todos los proyectos' : (state.proyectoActivo || ''));
+  const detalle = (p) => (p.formatos ? p.formatos.join(' · ') : 'Feed · Stories · Reels · Carrusel');
+  document.getElementById('pd2-plataforma-grid').innerHTML = lista.map((p) => {
+    const elegida = state.pd2Plataformas.includes(p.nombre);
+    const deshabilitada = p.habilitada === false;
+    return '<button type="button" class="plataforma-card' + (elegida ? ' elegida' : '') + '" data-action="pd2-plataforma-toggle" data-id="' + esc(p.nombre) + '" ' + (deshabilitada ? 'disabled title="Solo en Pedido Manual"' : '') + '>'
+      + badgePendientes(contarPendientes({ plataforma: p.nombre }))
+      + '<i class="ph ' + esc(iconoPlataforma(p.nombre)) + '"></i>'
+      + '<span class="nombre">' + esc(p.nombre) + '</span>'
+      + '<span class="detalle">' + esc(detalle(p)) + '</span>'
+      + '</button>';
+  }).join('');
+  const comb = plataformaPd2Actual();
+  const formatosComunes = comb.formatos ? comb.formatos.map((f) => f.appsheet_valor) : ['Imagen', 'Video', 'Carrusel'];
+  const nota = document.getElementById('pd2-plataforma-nota');
+  if (!state.pd2Plataformas.length) nota.textContent = 'Elegí al menos una plataforma.';
+  else if (state.pd2Plataformas.length > 1) nota.textContent = formatosComunes.length ? ('Formatos en común: ' + formatosComunes.join(' · ') + (comb.objetivos ? ' — objetivos: ' + comb.objetivos.join(' · ') : '')) : 'Estas plataformas no comparten ningún formato — sacá alguna.';
+  else nota.textContent = comb.esMeta ? 'Meta publica solo (en pausa) desde PAUTADOR.' : (comb.nombre + ' se carga a mano en la plataforma y se marca hecha desde Historial.');
+  document.getElementById('pd2-plataforma-continuar').disabled = !state.pd2Plataformas.length || !formatosComunes.length;
+}
+
+function togglePlataformaPd2(nombre) {
+  const i = state.pd2Plataformas.indexOf(nombre);
+  if (i >= 0) state.pd2Plataformas.splice(i, 1); else state.pd2Plataformas.push(nombre);
+  renderGrillaPlataformas();
+}
+
+function confirmarPlataformasPd2() {
+  if (!state.pd2Plataformas.length) return;
+  state.pd2PlataformaElegida = true;
+  state.pd2Placements = [];
+  state.pd2Visibilidad = 'DARK';
+  const selFormato = document.getElementById('pd2-formato');
+  if (selFormato) selFormato.innerHTML = '';
+  reiniciarMaterialesPiezasV2();
+  renderTabPedido2();
 }
 
 function renderMaterialBulkV2(i) {
@@ -3291,8 +4294,10 @@ function renderItemBulkV2(i) {
   const copyBloque = state.pd2Visibilidad === 'DARK'
     ? `<div class="field" style="grid-column:1 / -1"><label>Copy</label><textarea class="input" id="${prefix}-copy" rows="2" placeholder="Texto del anuncio"></textarea></div>`
     : '';
-  const audienciaBloque = `<div class="field">
-      <label>Audiencia principal</label>
+  // Con una sola pieza, la audiencia es la general del Módulo 2 — no se
+  // vuelve a pedir. Con 2 o más, cada pieza puede tener una distinta.
+  const audienciaBloque = state.pd2BulkItems.length < 2 ? '' : `<div class="field">
+      <label>Audiencia principal <span style="font-weight:400;color:var(--color-neutral-500)">(si es distinta a la general)</span></label>
       <div style="display:flex;gap:8px;align-items:flex-start">
         <div style="flex:1;min-width:0">${renderAudienciaSelect(`${prefix}-audiencia`, state.pdAudiencias, item.audienciaCodigo || '')}</div>
         <div id="${prefix}-otra-audiencia-wrap" style="flex:1;min-width:0" ${item.audienciaCodigo === 'Otra' ? '' : 'hidden'}>
@@ -3407,6 +4412,9 @@ function armarContextoBulkV2() {
     otrasRefuerzo: document.getElementById('pd2-otras-refuerzo').value.trim(),
     linkDestino: document.getElementById('pd2-link-destino').value.trim(),
     formatoInput: document.getElementById('pd2-formato'),
+    plataforma: plataformaPd2Actual().nombre,
+    categoriaPieza: document.getElementById('pd2-categoria-wrap').hidden ? '' : document.getElementById('pd2-categoria-pieza').value,
+    gobernador: document.getElementById('pd2-gobernador-wrap').hidden ? '' : document.getElementById('pd2-gobernador').value,
     fechaInicio: document.getElementById('pd2-fecha-inicio').value,
     fechaFin: document.getElementById('pd2-fecha-fin').value,
     campana: document.getElementById('pd2-campana').value.trim(),
@@ -3462,7 +4470,11 @@ function armarDatosPiezaV2(i, ctx) {
       ? item.archivoSubido.material
       : (materialInput ? materialInput.value.trim() : '')),
     materialStories: materialStoriesFinal,
-    post: state.pd2Visibilidad === 'PUBLICO' && item.modoMaterial === 'post' ? item.postSeleccionado : null,
+    // "post" viaja tanto si se eligió de la grilla como si se resolvió desde
+    // "Pegar link" (ver buscarPostPorLinkV2, en ambos casos queda en
+    // item.postSeleccionado) — el server (crearPedido) exige post.id para
+    // Público sin importar cómo se llegó a él.
+    post: state.pd2Visibilidad === 'PUBLICO' ? item.postSeleccionado : null,
     copy: copyInput ? copyInput.value.trim() : '',
     presupuesto,
     fechaInicio: ctx.fechaInicio,
@@ -3472,11 +4484,17 @@ function armarDatosPiezaV2(i, ctx) {
       ? [item.postSeleccionado.plataforma === 'Instagram' ? 'instagram' : 'facebook']
       : redesCompartidas,
     placements: state.pd2Visibilidad === 'PUBLICO' ? [] : state.pd2Placements,
-    // Solo "Crear Anuncios": el reparto que se definió para esta pieza.
-    reparto: hayQueRepartirPiezaV2(i) ? item.reparto : null,
+    // El reparto propio de la pieza (solo "Crear Anuncios" con más de un
+    // conjunto, ver "Distribuir presupuesto" en Módulo 5) pisa al reparto
+    // compartido de "Se van a crear estos cruces" (Módulo 2, mismo para
+    // todas las piezas) — si no hay uno propio, se manda el compartido.
+    reparto: hayQueRepartirPiezaV2(i) ? item.reparto : (combosDelPd2().length > 1 ? repartoPlanoPd2() : null),
     comentarios: ctx.comentarios,
-    combosExcluidos: Object.keys(state.pd2CombosExcluidos),
+    combosExcluidos: combosDelPd2().length > 1 ? excluidosParaEnvioPd2() : Object.keys(state.pd2CombosExcluidos),
     bulkId: ctx.bulkId,
+    plataforma: ctx.plataforma,
+    categoriaPieza: ctx.categoriaPieza,
+    gobernador: ctx.gobernador,
   };
 }
 
@@ -3501,6 +4519,28 @@ async function verificarMaterialesBulkV2(ctxParam) {
       previews.push(item.postSeleccionado
         ? { i, ok: true, tipo: 'publicación existente', previewUrl: item.postSeleccionado.imagen || '' }
         : { i, ok: false, error: 'No elegiste la publicación.' });
+      continue;
+    }
+    if (state.pd2Visibilidad === 'PUBLICO' && item.modoMaterial === 'link') {
+      // "Pegar link" en Público: no es un material para subir, es el atajo
+      // para no tener que buscar la publicación en la grilla cuando es
+      // vieja (no está entre los últimos 12 que trae "Elegir
+      // publicación") — se resuelve contra Meta de verdad (ver
+      // resolverPostDesdeLinkV2).
+      const inputLink = document.getElementById('pd2bulk' + i + '-material');
+      const link = inputLink ? inputLink.value.trim() : '';
+      if (!link) {
+        previews.push({ i, ok: false, error: 'Falta el link de la publicación.' });
+        continue;
+      }
+      try {
+        const encontrado = await resolverPostDesdeLinkV2(link);
+        item.postSeleccionado = encontrado;
+        previews.push({ i, ok: true, tipo: 'publicación existente', previewUrl: encontrado.imagen || '' });
+      } catch (err) {
+        item.postSeleccionado = null;
+        previews.push({ i, ok: false, error: err.message });
+      }
       continue;
     }
     const formatoInfoPieza = formatoInfoPd2Actual();
@@ -3541,6 +4581,43 @@ async function verificarMaterialesBulkV2(ctxParam) {
     }
   }
 
+  // Specs de Placement (AppSheet/Specs Meta.xlsx): se mide cada pieza desde
+  // el navegador (o con las medidas que ya mandó /subir) y se evalúa contra
+  // los placements elegidos — bloqueos y avisos quedan en el preview
+  // (renderPreviewsBulkV2) y los bloqueos frenan "Crear" (enviarBulkV2).
+  // Público no aplica: la publicación ya existe, Meta ya la aceptó.
+  // Specs de Meta (proporciones por Placement) — otra plataforma no tiene
+  // placements de Meta, solo se miden las piezas para mostrar el tamaño.
+  if (state.pd2Visibilidad !== 'PUBLICO' && plataformaPd2Actual().esMeta) {
+    const placementsElegidos = state.pd2Placements && state.pd2Placements.length ? state.pd2Placements : ['feed'];
+    const formatoSpecs = formatoInfoPd2Actual();
+    for (const p of previews) {
+      if (!p.ok) continue;
+      const item = state.pd2BulkItems[p.i];
+      let medidas = [];
+      if (p.carruselCantidad) {
+        const urls = (item.carrusel || []).map((c) => (c.archivo && c.archivo.previewUrl) || '').filter(Boolean);
+        // eslint-disable-next-line no-await-in-loop
+        medidas = await Promise.all(urls.map((u) => medirMedia(u, false)));
+      } else if (p.width && p.height) {
+        medidas = [{ width: p.width, height: p.height }];
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        medidas = [await medirMedia(p.previewUrl, p.tipo === 'video')];
+      }
+      p.medidas = medidas.filter(Boolean);
+      const specs = evaluarSpecsPieza({
+        placements: placementsElegidos,
+        modo: formatoSpecs ? formatoSpecs.modo : (p.carruselCantidad ? 'carrusel' : p.tipo),
+        esVideo: p.tipo === 'video',
+        conLink: !!ctx.linkDestino,
+        medidas: p.medidas,
+      });
+      p.bloqueos = specs.bloqueos;
+      p.avisos = specs.avisos;
+    }
+  }
+
   // El material puede estar perfecto y aun así faltar algo que solo sabe
   // crearPedido (Copy, Formato, Link de destino con Objetivo Tráfico,
   // Activo/Eje/Tipo, reparto) — se valida acá TAMBIÉN contra el servidor
@@ -3569,7 +4646,10 @@ async function verificarMaterialesBulkV2(ctxParam) {
 
   state.pd2BulkPreviews = previews;
   state.pd2BulkVerificando = false;
-  btn.disabled = false;
+  // Con un bloqueo de specs el botón queda apagado: no tiene sentido dejar
+  // que lo intente si Meta lo va a rechazar (enviarBulkV2 lo vuelve a
+  // chequear por las dudas).
+  btn.disabled = previews.some((p) => p.ok && p.bloqueos && p.bloqueos.length);
   renderResultadoBulkV2();
 }
 
@@ -3578,6 +4658,17 @@ async function verificarMaterialesBulkV2(ctxParam) {
 function inicialesDe(nombre) {
   const palabras = String(nombre || '').trim().split(/\s+/).filter(Boolean);
   return ((palabras[0] ? palabras[0][0] : '') + (palabras[1] ? palabras[1][0] : '')).toUpperCase();
+}
+
+// "https://www.chubut.gov.ar/obras?x=1" -> "chubut.gov.ar" (lo que Meta
+// muestra arriba del título en la tarjeta de link).
+function dominioDe(url) {
+  const texto = String(url || '').trim();
+  try {
+    return new URL(/^https?:\/\//i.test(texto) ? texto : 'https://' + texto).hostname.replace(/^www\./, '');
+  } catch (e) {
+    return texto.replace(/^https?:\/\//i, '').split('/')[0];
+  }
 }
 
 // Simula cómo se ve el anuncio en Facebook o Instagram (foto de perfil +
@@ -3597,6 +4688,24 @@ function renderMockPost(o) {
   const badge = o.badge ? '<span style="position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);color:#fff;font-size:10px;padding:2px 6px;border-radius:10px">' + esc(o.badge) + '</span>' : '';
   const iniciales = esc(inicialesDe(o.nombrePagina));
 
+  // Con Link de destino, Meta muestra la tarjeta de link (dominio + título
+  // + botón) en Facebook y una barra "Más información" en Instagram — el
+  // preview lo refleja para que se vea cómo queda la pieza con link. El
+  // botón real hoy es siempre "Más información" (LEARN_MORE).
+  const dominio = o.linkDestino ? dominioDe(o.linkDestino) : '';
+  const tarjetaLinkFb = dominio
+    ? '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f0f2f5;border-top:1px solid #e4e6eb">'
+      + '<div style="flex:1;min-width:0">'
+      +   '<div style="font-size:11px;color:#65676b;text-transform:uppercase;letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(dominio) + '</div>'
+      +   '<div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(o.nombrePagina || 'Tu página') + '</div>'
+      + '</div>'
+      + '<div style="flex:none;background:#e4e6eb;color:#050505;font-size:13px;font-weight:600;padding:8px 12px;border-radius:6px">Más información</div>'
+      + '</div>'
+    : '';
+  const barraLinkIg = dominio
+    ? '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;font-size:13px;font-weight:600;color:#0095f6;border-bottom:1px solid #efefef">Más información <i class="ph ph-caret-right"></i></div>'
+    : '';
+
   if (o.plataforma === 'Instagram') {
     const avatar = '<div style="width:34px;height:34px;border-radius:50%;padding:2px;background:linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888);flex:none">'
       + '<div style="width:100%;height:100%;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#262626">' + (iniciales || '<i class="ph ph-storefront"></i>') + '</div>'
@@ -3611,6 +4720,7 @@ function renderMockPost(o) {
       +   '<i class="ph ph-dots-three" style="font-size:18px"></i>'
       + '</div>'
       + '<div style="position:relative">' + media + badge + '</div>'
+      + barraLinkIg
       + '<div style="display:flex;align-items:center;gap:14px;padding:9px 12px 4px;font-size:20px">'
       +   '<i class="ph ph-heart"></i><i class="ph ph-chat-circle"></i><i class="ph ph-paper-plane-tilt"></i>'
       +   '<span style="flex:1"></span><i class="ph ph-bookmark-simple"></i>'
@@ -3629,6 +4739,7 @@ function renderMockPost(o) {
     + '</div>'
     + (o.copy ? '<div style="padding:0 12px 10px;font-size:13px;line-height:1.35;white-space:pre-wrap;word-break:break-word">' + esc(o.copy) + '</div>' : '')
     + '<div style="position:relative">' + media + badge + '</div>'
+    + tarjetaLinkFb
     + '<div style="display:flex;justify-content:space-around;padding:7px 4px;font-size:12px;color:#65676b;border-top:1px solid #eee">'
     +   '<span><i class="ph ph-thumbs-up"></i> Me gusta</span>'
     +   '<span><i class="ph ph-chat-circle"></i> Comentar</span>'
@@ -3642,12 +4753,21 @@ function renderPreviewsBulkV2() {
   if (!previews) return '';
   const activo = (state.pdActivos || []).find((a) => a.activo_key === state.pd2ActivoKey);
   const nombrePagina = activo ? activo.activo : '';
+  const linkDestinoEl = document.getElementById('pd2-link-destino');
+  const linkDestino = linkDestinoEl ? linkDestinoEl.value.trim() : '';
   const unaSola = previews.length === 1;
   const tarjetas = previews.map(function (p) {
     if (!p.ok) {
       return '<div style="border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);padding:14px;font-size:12px;color:var(--color-neutral-300)">'
         + (unaSola ? '' : '<strong>Pieza ' + (p.i + 1) + '</strong><br>') + esc(p.error) + '</div>';
     }
+    // Specs (evaluarSpecsPieza): los bloqueos van en rojo y frenan el
+    // "Crear"; los avisos son recomendaciones, se muestran y se puede seguir.
+    const bloqueosHtml = (p.bloqueos || []).map((b) => '<div class="error" style="margin-top:8px;font-size:12px"><i class="ph ph-x-circle"></i> ' + esc(b) + '</div>').join('');
+    const avisosHtml = (p.avisos || []).map((a) => '<div style="margin-top:8px;padding:8px 10px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);font-size:12px;color:var(--color-neutral-300)"><i class="ph ph-warning"></i> ' + esc(a) + '</div>').join('');
+    const medidasHtml = p.medidas && p.medidas.length
+      ? '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:4px">' + p.medidas.map((m) => m.width + '×' + m.height).join(' · ') + ' px</div>'
+      : '';
     const item = state.pd2BulkItems[p.i];
     const copyEl = document.getElementById('pd2bulk' + p.i + '-copy');
     const copy = p.tipo === 'publicación existente'
@@ -3658,9 +4778,12 @@ function renderPreviewsBulkV2() {
     // (state.pd2Redes) — se muestra un mock por cada una, con el look real
     // de esa red (pedido del usuario: "que simule Instagram cuando es
     // Instagram una de las redes").
-    const plataformas = p.tipo === 'publicación existente'
-      ? [(item && item.postSeleccionado && item.postSeleccionado.plataforma) || 'Facebook']
-      : ((state.pd2Redes && state.pd2Redes.length) ? state.pd2Redes.map((r) => (r === 'instagram' ? 'Instagram' : 'Facebook')) : ['Facebook']);
+    const platPd2 = plataformaPd2Actual();
+    const plataformas = !platPd2.esMeta
+      ? ['Facebook'] // no hay mock propio de Youtube/Tik Tok/X/Display: se muestra la pieza en un marco genérico
+      : (p.tipo === 'publicación existente'
+        ? [(item && item.postSeleccionado && item.postSeleccionado.plataforma) || 'Facebook']
+        : ((state.pd2Redes && state.pd2Redes.length) ? state.pd2Redes.map((r) => (r === 'instagram' ? 'Instagram' : 'Facebook')) : ['Facebook']));
     const post = plataformas.map((plataforma) => renderMockPost({
       nombrePagina,
       copy,
@@ -3668,14 +4791,25 @@ function renderPreviewsBulkV2() {
       esVideo: p.tipo === 'video',
       badge: p.carruselCantidad ? '1/' + p.carruselCantidad : '',
       plataforma,
+      // Publicación existente: el post ya tiene su propio contenido, no se
+      // le agrega tarjeta de link.
+      linkDestino: p.tipo === 'publicación existente' ? '' : linkDestino,
     })).join('<div style="height:10px"></div>');
-    return unaSola ? post : ('<div>' + post + '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:4px">Pieza ' + (p.i + 1) + '</div></div>');
+    const extras = medidasHtml + bloqueosHtml + avisosHtml;
+    return unaSola
+      ? '<div>' + post + extras + '</div>'
+      : ('<div>' + post + '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:4px">Pieza ' + (p.i + 1) + '</div>' + extras + '</div>');
   }).join('');
 
   const fallan = previews.filter(function (p) { return !p.ok; }).length;
+  const bloqueadas = previews.filter(function (p) { return p.ok && p.bloqueos && p.bloqueos.length; }).length;
   const cabecera = fallan
     ? '<div class="error" style="margin-bottom:10px">' + fallan + ' pieza(s) con el material mal: corregí el link y verificá de nuevo. No se creó nada.</div>'
-    : '<div style="margin-bottom:10px;font-size:12px;color:var(--color-neutral-400)">Así se va a ver en Meta. Revisá que sean las piezas correctas y confirmá.</div>';
+    : (bloqueadas
+      ? '<div class="error" style="margin-bottom:10px">' + bloqueadas + ' pieza(s) con una medida que Meta rechaza para el Placement elegido (ver abajo). Corregí el material o el Placement y verificá de nuevo.</div>'
+      : (plataformaPd2Actual().esMeta
+        ? '<div style="margin-bottom:10px;font-size:12px;color:var(--color-neutral-400)">Así se va a ver en Meta. Revisá que sean las piezas correctas y confirmá.</div>'
+        : '<div style="margin-bottom:10px;font-size:12px;color:var(--color-neutral-400)">Pieza para <strong>' + esc(plataformaPd2Actual().nombre) + '</strong> — se carga a mano en cada plataforma y se marca hecha desde Historial. El marco de abajo es solo para revisar el material.</div>'));
 
   return cabecera + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:14px">' + tarjetas + '</div>';
 }
@@ -3691,7 +4825,9 @@ function renderResultadoFinalV2() {
   const unaSola = resultados.length === 1;
   document.getElementById('pd2-resultado-final-body').innerHTML = resultados.map((r, i) => {
     if (!r.ok) return `<div class="error">${unaSola ? '' : `Pieza ${i + 1}: `}${esc(r.error)}</div>`;
-    const estado = r.publicado ? 'publicada en Meta (en pausa)' : 'creada';
+    const estado = r.publicado
+      ? 'publicada en Meta (en pausa)'
+      : 'creada — queda para cargar a mano' + (r.plataforma && r.plataforma !== 'Meta' ? ' en ' + r.plataforma : '') + ' y marcar hecha desde Historial';
     const prefijo = unaSola ? 'Código' : `Pieza ${i + 1}: código`;
     return `<div style="color:var(--color-accent-2-600)">${prefijo} <code>${esc(r.codigo)}</code> — ${estado}.</div>`;
   }).join('');
@@ -3710,9 +4846,15 @@ function resetPedidoAnunciosV2() {
   state.pd2AudienciaCodigo = '';
   state.pd2Refuerzo = [];
   state.pd2CombosExcluidos = {};
+  state.pd2RepartoObjetivo = null;
+  state.pd2RepartoAud = {};
+  state.pd2RepartoFirma = null;
+  state.pd2PresupuestoPreview = null;
   state.pd2Visibilidad = 'DARK';
   state.pd2Redes = ['facebook', 'instagram'];
   state.pd2Placements = [];
+  state.pd2Plataformas = ['Meta'];
+  state.pd2PlataformaElegida = false;
   state.pd2Posts = [];
   state.pd2CargandoPosts = false;
   state.pd2BulkItems = [];
@@ -3730,7 +4872,9 @@ function renderResultadoBulkV2() {
   const unaSola = resultados.length === 1;
   const filas = resultados.map((r, i) => {
     if (!r.ok) return `<div class="error">${unaSola ? '' : `Pieza ${i + 1}: `}${esc(r.error)}</div>`;
-    const estado = r.publicado ? 'publicada en Meta (en pausa)' : 'creada';
+    const estado = r.publicado
+      ? 'publicada en Meta (en pausa)'
+      : 'creada — queda para cargar a mano' + (r.plataforma && r.plataforma !== 'Meta' ? ' en ' + r.plataforma : '') + ' y marcar hecha desde Historial';
     const prefijo = unaSola ? 'Código' : `Pieza ${i + 1}: código`;
     return `<div style="color:var(--color-accent-2-600)">${prefijo} <code>${esc(r.codigo)}</code> — ${estado}.</div>`;
   }).join('');
@@ -3778,6 +4922,14 @@ async function enviarBulkV2() {
   if (!ctx.campana) { state.pd2BulkError = 'Escribí la Campaña / Comunicación (módulo 1) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
   if (!ctx.audienciaCodigo) { state.pd2BulkError = 'Elegí la Audiencia principal (módulo 2) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
   if (!state.pd2BulkItems.length) { state.pd2BulkError = 'Elegí la Cantidad de piezas (módulo 4) antes de continuar.'; renderBulkErrorV2(); return; }
+  // Specs de Placement: si el preview marcó un bloqueo (medida que Meta
+  // rechaza), no se manda nada — ver evaluarSpecsPieza.
+  const conBloqueo = (state.pd2BulkPreviews || []).filter((p) => p.ok && p.bloqueos && p.bloqueos.length);
+  if (conBloqueo.length) {
+    state.pd2BulkError = conBloqueo.length + ' pieza(s) con una medida que Meta rechaza para el Placement elegido (ver el preview). Corregí el material o el Placement antes de crear.';
+    renderBulkErrorV2();
+    return;
+  }
 
   // Mismo chequeo que en v1, pieza por pieza: si alguna no llega al mínimo
   // de Meta o tiene un reparto que no suma 100%, no se manda nada (mejor
@@ -3887,28 +5039,62 @@ function cambiarTab(tab) {
   document.getElementById('tab-pedido2').hidden = !(tab === 'pedido2' || tab === 'crear');
   document.getElementById('tab-pendientes').hidden = tab !== 'pendientes';
   document.getElementById('tab-admin').hidden = tab !== 'admin';
+  document.getElementById('tab-usuarios').hidden = tab !== 'usuarios';
   if (tab === 'pedido2' || tab === 'crear') { if (!state.pdProyectos.length) cargarDatosPedido().then(renderTabPedido2); else renderTabPedido2(); }
   if (tab === 'pendientes') cargarItems();
   if (tab === 'admin') { if (!state.admActivosCargados) cargarDatosAdmin(); else renderTabAdmin(); }
+  if (tab === 'usuarios') cargarPanelUsuarios();
   render();
 }
 
-// ---------- Onboarding: Login → Proyecto → Oficial/Informativo ----------
-// Tres pantallas obligatorias antes de llegar a las pestañas de siempre.
-// Cada elección restringe lo que se ve después (Proyecto acota Validación,
-// Ecosistema acota qué Tipo de campaña se puede elegir) — ver
-// middleware/usuarioActual.js para la validación server-side equivalente.
-
-// Oficial todavía no arrancó (Fase 3, ver equiv_tipo.notas) — queda visible
-// pero bloqueado en la pantalla 3 y en el botón de cambiar del nav, para no
-// tener que tocar esto de nuevo cuando se habilite.
-const ECOSISTEMAS_HABILITADOS = ['Informativo'];
+// ---------- Onboarding: Login → Proyecto → Modo → (Normal) Ecosistema ----------
+// Pantallas obligatorias antes de llegar a las pestañas de siempre. Cada
+// elección restringe lo que se ve después (Proyecto acota Historial, Modo
+// acota qué Tipo/Objetivo/Activo se puede elegir y si PAUTADOR publica
+// solo o queda para cargar a mano, Ecosistema acota además qué Tipo de
+// campaña aparece) — ver middleware/usuarioActual.js para la validación
+// server-side equivalente.
+//
+// Modo (automatizado/normal) es un eje DISTINTO de Ecosistema
+// (Oficial/Informativo): separa CÓMO se ejecuta el pedido, no A QUIÉN
+// pertenece el contenido. Los dos modos preguntan Ecosistema como cuarto
+// paso del onboarding (desde 2026-09-11 Oficial también está prendido en
+// Automatizado: Tipos A/B/C y activos con uso Oficial en AppSheet).
+const MODOS_HABILITADOS = ['automatizado', 'normal'];
+const MODOS_VALIDOS = ['automatizado', 'normal'];
+// Único ecosistema alcanzable en modo "automatizado" (ahí no hay pantalla
+// propia, se manda siempre este valor) — Oficial todavía no arrancó (Fase
+// 3, ver equiv_tipo.notas), así que en "normal" queda visible pero
+// bloqueado en su propia pantalla.
+// Desde 2026-09-11 ("prendé Oficial") los dos ecosistemas están
+// habilitados y se preguntan en los dos modos (ver pantallaActual).
+const ECOSISTEMAS_HABILITADOS = ['Oficial', 'Informativo'];
 const ECOSISTEMAS_VALIDOS = ['Oficial', 'Informativo'];
+
+// Copy visible de la pantalla de elegir camino.
+const MODO_COPY = {
+  automatizado: {
+    titulo: 'Pedido Automatizado',
+    detalle: 'Meta, intensidad Media o Baja, objetivo Alcance o Interacción — se publica solo (en pausa), sin revisión previa.',
+  },
+  normal: {
+    titulo: 'Pedido Manual',
+    detalle: 'Todo lo demás (incluye lo del automatizado): intensidad Alta, otras plataformas y objetivos. Se carga a mano en Meta y se marca hecho.',
+  },
+};
 
 function esAdmin() {
   const u = usuarioActual();
   return !!u && u.rol === 'administrador';
 }
+
+// Proyecto de un cliente habilitado solo para Informativo (Córdoba, por
+// ahora) — viene de GET /api/proyectos?detalle=1 (CLIENTES_SOLO_INFORMATIVO).
+function proyectoSoloInformativo(proyecto) {
+  const p = (state.proyectosDetalle || []).find((d) => d.proyecto === (proyecto || state.proyectoActivo));
+  return !!(p && p.soloInformativo);
+}
+const LEYENDA_SOLO_INFORMATIVO = 'Por ahora solo canal Informativo — el canal Oficial va a tener su propio módulo.';
 
 // Qué pantalla corresponde mostrar AHORA MISMO, según lo que ya se eligió y
 // si sigue siendo válido para el usuario actual (cambiar de usuario en el
@@ -3918,10 +5104,25 @@ function esAdmin() {
 function pantallaActual() {
   if (!state.usuarioActualId || !usuarioActual()) return 'login';
   const permitidos = proyectosPermitidos();
-  const proyectoValido = state.proyectoActivo === 'TODOS'
-    ? esAdmin()
-    : !!state.proyectoActivo && (permitidos === 'todos' || permitidos.includes(state.proyectoActivo));
+  // 'TODOS' ya no es una opción (se sacó "Ver todos los proyectos") — un
+  // valor viejo guardado en el browser manda de vuelta a elegir uno.
+  const proyectoValido = state.proyectoActivo !== 'TODOS'
+    && !!state.proyectoActivo && (permitidos === 'todos' || permitidos.includes(state.proyectoActivo));
   if (!proyectoValido) return 'proyecto';
+  const modoValido = state.modoActivo === 'TODOS'
+    ? esAdmin()
+    : MODOS_VALIDOS.includes(state.modoActivo);
+  if (!modoValido) return 'modo';
+  // Ecosistema (Oficial/Informativo) se pregunta en los dos modos — salvo en
+  // un proyecto "solo Informativo" (ej. Córdoba): ahí ni se pregunta, queda
+  // Informativo fijo (el aviso está en la tarjeta del proyecto).
+  if (proyectoSoloInformativo()) {
+    if (state.ecosistemaActivo !== 'Informativo') {
+      state.ecosistemaActivo = 'Informativo';
+      localStorage.setItem('pautador_ecosistema_activo', 'Informativo');
+    }
+    return 'app';
+  }
   const ecosistemaValido = state.ecosistemaActivo === 'TODOS'
     ? esAdmin()
     : ECOSISTEMAS_VALIDOS.includes(state.ecosistemaActivo);
@@ -3947,16 +5148,52 @@ async function entrarAlApp() {
 // llegar a la pantalla 2, no en cada render. pm_cuentas no valida, así que
 // no ve el globo.
 async function prepararPantallaProyecto() {
-  const r = await apiFetch('/api/proyectos');
-  state.proyectosDisponibles = r.ok ? await r.json() : [];
-  const u = usuarioActual();
-  if (u && (u.rol === 'implementador' || u.rol === 'administrador')) {
-    const r2 = await apiFetch('/api/proyectos-pendientes');
-    state.pendientesPorProyecto = r2.ok ? await r2.json() : {};
-  } else {
-    state.pendientesPorProyecto = {};
-  }
+  const r = await apiFetch('/api/proyectos?detalle=1');
+  state.proyectosDetalle = r.ok ? await r.json() : [];
+  state.proyectosDisponibles = state.proyectosDetalle.map((p) => p.proyecto);
+  await cargarPendientesDetalle(true);
   render();
+}
+
+// Globos de pendientes: los ven Implementador y Administrador (son quienes
+// validan). Se cargan una vez y se recuentan en el front para cada
+// pantalla (contarPendientes); `forzar` los vuelve a pedir.
+async function cargarPendientesDetalle(forzar) {
+  const u = usuarioActual();
+  if (!u || !(u.rol === 'implementador' || u.rol === 'administrador')) {
+    state.pendientesDetalle = [];
+    state.pendientesPorProyecto = {};
+    state.pendientesDetalleCargado = true;
+    return;
+  }
+  if (state.pendientesDetalleCargado && !forzar) return;
+  const r = await apiFetch('/api/pendientes-detalle');
+  state.pendientesDetalle = r.ok ? await r.json() : [];
+  state.pendientesDetalleCargado = true;
+  state.pendientesPorProyecto = {};
+  state.pendientesDetalle.forEach((p) => { state.pendientesPorProyecto[p.proyecto] = (state.pendientesPorProyecto[p.proyecto] || 0) + 1; });
+}
+
+// Cuenta pendientes que matchean el filtro; lo ya elegido en el onboarding
+// (proyecto/modo/ecosistema) acota, salvo 'TODOS'. plataforma: la pieza
+// cuenta si la incluye entre las suyas.
+function contarPendientes(filtro) {
+  const f = Object.assign({ proyecto: state.proyectoActivo, modo: state.modoActivo, ecosistema: state.ecosistemaActivo }, filtro || {});
+  return (state.pendientesDetalle || []).filter((p) =>
+    (!f.proyecto || f.proyecto === 'TODOS' || p.proyecto === f.proyecto)
+    && (!f.modo || f.modo === 'TODOS' || p.modo === f.modo)
+    && (!f.ecosistema || f.ecosistema === 'TODOS' || p.ecosistema === f.ecosistema)
+    && (!f.plataforma || p.plataformas.includes(f.plataforma))).length;
+}
+function badgePendientes(n, extra) {
+  return n > 0 ? '<span class="pantalla-onboarding-badge" ' + (extra || '') + ' title="' + n + ' pendiente(s) de validar">' + n + '</span>' : '';
+}
+// Las pantallas de Modo/Ecosistema/Plataforma pueden abrirse sin pasar por
+// la de Proyecto (toggles del nav, recarga) — si no hay conteo, se pide y
+// se vuelve a dibujar.
+function asegurarPendientesDetalle(volverADibujar) {
+  if (state.pendientesDetalleCargado) return;
+  cargarPendientesDetalle().then(volverADibujar);
 }
 
 function elegirUsuario(id) {
@@ -3972,10 +5209,12 @@ function elegirUsuario(id) {
 function elegirProyecto(valor) {
   state.proyectoActivo = valor;
   localStorage.setItem('pautador_proyecto_activo', valor);
-  // El Ecosistema (Oficial/Informativo) se vuelve a preguntar en CADA
-  // cambio de Proyecto — antes quedaba guardado en localStorage y una vez
-  // elegido una vez, pantallaActual() saltaba esa pantalla para siempre,
-  // incluso al cambiar a un Proyecto distinto.
+  // Modo y Ecosistema se vuelven a preguntar en CADA cambio de Proyecto —
+  // antes quedaban guardados en localStorage y una vez elegidos,
+  // pantallaActual() saltaba esas pantallas para siempre, incluso al
+  // cambiar a un Proyecto distinto.
+  state.modoActivo = null;
+  localStorage.removeItem('pautador_modo_activo');
   state.ecosistemaActivo = null;
   localStorage.removeItem('pautador_ecosistema_activo');
   state.items = [];
@@ -3984,9 +5223,13 @@ function elegirProyecto(valor) {
   avanzarSiCorresponde();
 }
 
-function elegirEcosistema(valor) {
-  state.ecosistemaActivo = valor;
-  localStorage.setItem('pautador_ecosistema_activo', valor);
+function elegirModo(valor) {
+  state.modoActivo = valor;
+  localStorage.setItem('pautador_modo_activo', valor);
+  // El Ecosistema se vuelve a pedir cada vez que se elige un modo, no queda
+  // pegado de una elección anterior (mismo criterio que el Proyecto).
+  state.ecosistemaActivo = null;
+  localStorage.removeItem('pautador_ecosistema_activo');
   // Fuerza a recargar /api/tipos con el filtro nuevo — vaciar solo pdTipos
   // no alcanza: cambiarTab() solo vuelve a pedir datos cuando pdProyectos
   // está vacío (ver cambiarTab), así que hay que vaciar eso también aunque
@@ -3997,8 +5240,17 @@ function elegirEcosistema(valor) {
   avanzarSiCorresponde();
 }
 
+function elegirEcosistema(valor) {
+  state.ecosistemaActivo = valor;
+  localStorage.setItem('pautador_ecosistema_activo', valor);
+  state.pdTipos = [];
+  state.pdProyectos = [];
+  render();
+  avanzarSiCorresponde();
+}
+
 // Botón "Cambiar de Proyecto" del nav — vuelve a la pantalla 2 sin tocar
-// Ecosistema (son elecciones independientes, cada una con su propio botón).
+// Modo (son elecciones independientes, cada una con su propio botón).
 function cambiarDeProyecto() {
   state.proyectoActivo = null;
   localStorage.removeItem('pautador_proyecto_activo');
@@ -4006,10 +5258,26 @@ function cambiarDeProyecto() {
   prepararPantallaProyecto();
 }
 
-// Botón del nav "Pasar a 'Oficial'"/"Pasar a 'Informativo'" — con solo dos
+// Botón del nav "Pasar a 'Automatizados'"/"Pasar a 'Normal'" — con solo dos
 // valores reales, alterna directo sin pantalla intermedia. Si el usuario
 // tenía "Ver ambos" (solo Admin) no hay un "otro" binario claro, así que
-// manda de vuelta a la pantalla 3 para elegir uno de los tres.
+// manda de vuelta a la pantalla 3 para elegir uno de los dos.
+function toggleModo() {
+  if (state.modoActivo === 'TODOS' || !MODOS_VALIDOS.includes(state.modoActivo)) {
+    state.modoActivo = null;
+    localStorage.removeItem('pautador_modo_activo');
+    render();
+    return;
+  }
+  const otro = state.modoActivo === 'automatizado' ? 'normal' : 'automatizado';
+  if (!MODOS_HABILITADOS.includes(otro)) return; // botón ya se muestra disabled
+  elegirModo(otro);
+}
+
+// Botón del nav "Pasar a 'Oficial'"/"Pasar a 'Informativo'" — solo visible
+// en modo "normal" (en "automatizado" no hay Ecosistema para elegir, ver
+// renderNavContexto). Si el usuario tenía "Ver ambos" (solo Admin) manda
+// de vuelta a la pantalla para elegir uno de los dos.
 function toggleEcosistema() {
   if (state.ecosistemaActivo === 'TODOS' || !ECOSISTEMAS_VALIDOS.includes(state.ecosistemaActivo)) {
     state.ecosistemaActivo = null;
@@ -4073,49 +5341,140 @@ function renderPantallaProyecto() {
   selUsuario.innerHTML = state.usuarios.map((usr) => `<option value="${esc(usr.id)}">${esc(usr.nombre)}</option>`).join('');
   if (state.usuarioActualId) selUsuario.value = state.usuarioActualId;
 
-  const opciones = (state.proyectosDisponibles || []).map((p) => {
+  // Agrupado por Cliente (config_activos.cliente): el cliente como título y
+  // debajo sus proyectos — un cliente con un solo proyecto se ve como
+  // siempre (pedido del usuario 2026-09-11, "opción 2: anidar").
+  // volumen15: códigos de los últimos 15 días (viene ordenado desc del
+  // server) — se muestra chico al lado del nombre y ordena todo.
+  const volumenDe = {};
+  (state.proyectosDetalle || []).forEach((d) => { volumenDe[d.proyecto] = d.volumen15 || 0; });
+  const opcionProyecto = (p) => {
     const pendientes = state.pendientesPorProyecto[p] || 0;
     const badge = pendientes > 0 ? '<span class="pantalla-onboarding-badge">' + pendientes + '</span>' : '';
-    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-proyecto" data-id="' + esc(p) + '">'
-      + '<span class="titulo">' + esc(p) + '</span>' + badge + '</button>';
-  }).join('');
-  const opcionTodos = esAdmin()
-    ? '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-proyecto" data-id="TODOS" style="border-style:dashed">'
-      + '<span class="titulo">Ver todos los proyectos</span></button>'
-    : '';
-  document.getElementById('pantalla-proyecto-lista').innerHTML = opciones + opcionTodos
+    // El volumen de 15 días solo ordena (pedido del usuario 2026-09-12): no se muestra.
+    // Proyecto solo Informativo (Córdoba): el aviso va acá mismo, en la
+    // tarjeta — después no se pregunta el canal.
+    const soloInf = proyectoSoloInformativo(p);
+    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-proyecto" data-id="' + esc(p) + '" ' + (soloInf ? 'title="' + esc(LEYENDA_SOLO_INFORMATIVO) + '"' : '') + '>'
+      + '<span style="display:flex;flex-direction:column;gap:3px;min-width:0"><span class="titulo">' + esc(p) + '</span>'
+      + (soloInf ? '<span class="subtitulo" style="margin:0;color:var(--color-warning, #d08a1e)"><i class="ph ph-info"></i> Solo canal Informativo por ahora</span>' : '')
+      + '</span>' + badge + '</button>';
+  };
+  const detalle = state.proyectosDetalle && state.proyectosDetalle.length
+    ? state.proyectosDetalle
+    : (state.proyectosDisponibles || []).map((p) => ({ proyecto: p, cliente: '', volumen15: 0 }));
+  const porCliente = new Map();
+  detalle.forEach((d) => {
+    const c = d.cliente || d.proyecto;
+    if (!porCliente.has(c)) porCliente.set(c, []);
+    porCliente.get(c).push(d.proyecto);
+  });
+  // Cuadrícula: una tarjeta por cliente con sus proyectos adentro — todas
+  // iguales, así un cliente de un solo proyecto no parece "colgar" del
+  // anterior. Clientes ordenados por el volumen total de sus proyectos y
+  // los proyectos por el suyo (los de más contenido, primero).
+  const volCliente = (proyectos) => proyectos.reduce((a, p) => a + (volumenDe[p] || 0), 0);
+  const tarjetas = [...porCliente.entries()]
+    .sort((a, b) => volCliente(b[1]) - volCliente(a[1]) || a[0].localeCompare(b[0], 'es'))
+    .map(([cliente, proyectos]) => '<div class="cliente-card">'
+      + '<div class="cliente-nombre"><i class="ph ph-buildings"></i> ' + esc(cliente) + '</div>'
+      + proyectos.sort((x, y) => (volumenDe[y] || 0) - (volumenDe[x] || 0) || x.localeCompare(y, 'es')).map(opcionProyecto).join('')
+      + '</div>').join('');
+  const opciones = tarjetas ? '<div class="cliente-grid">' + tarjetas + '</div>' : '';
+  // Sin "Ver todos los proyectos" (sacado a pedido del usuario 2026-09-11):
+  // siempre se trabaja sobre un proyecto concreto, también el admin.
+  document.getElementById('pantalla-proyecto-lista').innerHTML = opciones
     || '<p style="color:var(--color-neutral-500);font-size:13px">Todavía no te asignaron ningún Proyecto — mientras tanto, elegí más abajo con qué usuario entrar.</p>';
 }
 
-function renderPantallaEcosistema() {
-  document.getElementById('pantalla-ecosistema-contexto').textContent =
+function renderPantallaModo() {
+  asegurarPendientesDetalle(renderPantallaModo);
+  document.getElementById('pantalla-modo-contexto').textContent =
     state.proyectoActivo === 'TODOS' ? 'Todos los proyectos' : (state.proyectoActivo || '');
-  const opciones = ECOSISTEMAS_VALIDOS.map((eco) => {
-    const habilitado = ECOSISTEMAS_HABILITADOS.includes(eco);
-    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-ecosistema" data-id="' + esc(eco) + '" ' + (habilitado ? '' : 'disabled title="Todavía no está habilitado"') + '>'
-      + '<span class="titulo">' + esc(eco) + '</span>' + (habilitado ? '' : '<span class="subtitulo">Próximamente</span>') + '</button>';
+  const opciones = MODOS_VALIDOS.map((modo) => {
+    const habilitado = MODOS_HABILITADOS.includes(modo);
+    const copy = MODO_COPY[modo] || { titulo: modo, detalle: '' };
+    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-modo" data-id="' + esc(modo) + '" ' + (habilitado ? '' : 'disabled title="Todavía no está habilitado"') + '>'
+      + '<span style="display:flex;flex-direction:column;gap:2px">'
+      +   '<span class="titulo">' + esc(copy.titulo) + '</span>'
+      +   '<span class="subtitulo">' + esc(copy.detalle) + '</span>'
+      + '</span>'
+      + (habilitado ? badgePendientes(contarPendientes({ modo, ecosistema: null })) : '<span class="subtitulo" style="flex:none">Apagado</span>')
+      + '</button>';
   }).join('');
   const opcionAmbos = esAdmin()
-    ? '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-ecosistema" data-id="TODOS" style="border-style:dashed"><span class="titulo">Ver ambos</span></button>'
+    ? '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-modo" data-id="TODOS" style="border-style:dashed"><span class="titulo">Ver todo, sin restricciones</span>' + badgePendientes(contarPendientes({ modo: null, ecosistema: null })) + '</button>'
+    : '';
+  document.getElementById('pantalla-modo-lista').innerHTML = opciones + opcionAmbos;
+}
+
+// Canal (Oficial / Informativo) — se pregunta en los dos modos.
+function renderPantallaEcosistema() {
+  asegurarPendientesDetalle(renderPantallaEcosistema);
+  document.getElementById('pantalla-ecosistema-contexto').textContent =
+    (state.proyectoActivo === 'TODOS' ? 'Todos los proyectos' : (state.proyectoActivo || ''))
+    + (state.modoActivo && state.modoActivo !== 'TODOS' ? ' · ' + ((MODO_COPY[state.modoActivo] || {}).titulo || state.modoActivo) : '');
+  const detalleEco = { Oficial: 'Cuentas oficiales de gobierno y funcionarios.', Informativo: 'Medios y portales informativos.' };
+  const soloInf = proyectoSoloInformativo();
+  const opciones = ECOSISTEMAS_VALIDOS.map((eco) => {
+    const habilitado = ECOSISTEMAS_HABILITADOS.includes(eco) && !(soloInf && eco === 'Oficial');
+    const motivo = soloInf && eco === 'Oficial' ? LEYENDA_SOLO_INFORMATIVO : 'Todavía no está habilitado';
+    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-ecosistema" data-id="' + esc(eco) + '" ' + (habilitado ? '' : 'disabled title="' + esc(motivo) + '"') + '>'
+      + '<span style="display:flex;flex-direction:column;gap:2px">'
+      +   '<span class="titulo"><span class="eco-chip ' + (eco === 'Oficial' ? 'eco-oficial' : 'eco-informativo') + '">' + esc(eco) + '</span></span>'
+      +   '<span class="subtitulo">' + esc(habilitado ? (detalleEco[eco] || '') : motivo) + '</span>'
+      + '</span>'
+      + (habilitado ? badgePendientes(contarPendientes({ ecosistema: eco })) : '<span class="subtitulo">Apagado</span>')
+      + '</button>';
+  }).join('');
+  const opcionAmbos = esAdmin() && !soloInf
+    ? '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-ecosistema" data-id="TODOS" style="border-style:dashed"><span class="titulo">Ver ambos canales</span>' + badgePendientes(contarPendientes({ ecosistema: null })) + '</button>'
     : '';
   document.getElementById('pantalla-ecosistema-lista').innerHTML = opciones + opcionAmbos;
 }
 
 function renderNavContexto() {
+  const detalleProy = (state.proyectosDetalle || []).find((p) => p.proyecto === state.proyectoActivo);
+  const clienteNav = detalleProy && detalleProy.cliente && detalleProy.cliente !== state.proyectoActivo ? detalleProy.cliente + ' · ' : '';
   document.getElementById('nav-proyecto-actual').innerHTML =
-    '<i class="ph ph-buildings"></i> ' + esc(state.proyectoActivo === 'TODOS' ? 'Todos los proyectos' : (state.proyectoActivo || ''));
+    '<i class="ph ph-buildings"></i> ' + esc(state.proyectoActivo === 'TODOS' ? 'Todos los proyectos' : (clienteNav + (state.proyectoActivo || '')));
 
-  const btnEco = document.getElementById('nav-ecosistema-actual');
-  if (state.ecosistemaActivo === 'TODOS') {
-    btnEco.textContent = 'Oficial + Informativo — cambiar';
-    btnEco.disabled = false;
-    btnEco.title = 'Elegir un ecosistema';
+  const btnModo = document.getElementById('nav-modo-actual');
+  const tituloDe = (modo) => (MODO_COPY[modo] || {}).titulo || modo;
+  // Chips cortos (pedido del usuario 2026-09-12): el nombre y un ▾; el
+  // "pasar a…" queda en el title (tooltip).
+  if (state.modoActivo === 'TODOS') {
+    btnModo.textContent = 'Automatizado + Normal ▾';
+    btnModo.disabled = false;
+    btnModo.title = 'Elegir un modo';
   } else {
-    const otro = state.ecosistemaActivo === 'Informativo' ? 'Oficial' : 'Informativo';
-    const puedeIr = ECOSISTEMAS_HABILITADOS.includes(otro);
-    btnEco.textContent = (state.ecosistemaActivo || '') + ' — pasar a "' + otro + '"';
-    btnEco.disabled = !puedeIr;
-    btnEco.title = puedeIr ? ('Pasar a "' + otro + '"') : (otro + ' todavía no está habilitado');
+    const otro = state.modoActivo === 'automatizado' ? 'normal' : 'automatizado';
+    const puedeIr = MODOS_HABILITADOS.includes(otro);
+    btnModo.textContent = tituloDe(state.modoActivo) + ' ▾';
+    btnModo.disabled = !puedeIr;
+    btnModo.title = puedeIr ? ('Pasar a "' + tituloDe(otro) + '"') : (tituloDe(otro) + ' todavía no está habilitado');
+  }
+
+  // Botón de Ecosistema: en los dos modos, con el color del ecosistema
+  // (Oficial / Informativo) para que se distinga de un vistazo.
+  const btnEco = document.getElementById('nav-ecosistema-actual');
+  btnEco.hidden = false;
+  btnEco.classList.remove('eco-chip', 'eco-oficial', 'eco-informativo', 'eco-todos');
+  btnEco.classList.add('eco-chip', claseEcosistema());
+  if (!btnEco.hidden) {
+    if (state.ecosistemaActivo === 'TODOS') {
+      btnEco.textContent = 'Oficial + Informativo ▾';
+      btnEco.disabled = false;
+      btnEco.title = 'Elegir un canal';
+    } else {
+      const otroEco = state.ecosistemaActivo === 'Informativo' ? 'Oficial' : 'Informativo';
+      const puedeIrEco = ECOSISTEMAS_HABILITADOS.includes(otroEco) && !(otroEco === 'Oficial' && proyectoSoloInformativo());
+      btnEco.textContent = (state.ecosistemaActivo || '') + ' ▾';
+      btnEco.disabled = !puedeIrEco;
+      btnEco.title = puedeIrEco
+        ? ('Pasar a "' + otroEco + '"')
+        : (otroEco === 'Oficial' && proyectoSoloInformativo() ? LEYENDA_SOLO_INFORMATIVO : (otroEco + ' todavía no está habilitado'));
+    }
   }
 }
 
@@ -4132,7 +5491,7 @@ async function cambiarUsuario(id) {
   render();
   const pantalla = pantallaActual();
   if (pantalla === 'proyecto') { prepararPantallaProyecto(); return; }
-  if (pantalla === 'ecosistema') return;
+  if (pantalla === 'modo' || pantalla === 'ecosistema') return;
   const permitidas = tabsPermitidas();
   if (!permitidas.includes(state.tabActiva)) state.tabActiva = permitidas[0] || 'pendientes';
   cambiarTab(state.tabActiva);
@@ -4181,7 +5540,7 @@ async function iniciarApp() {
   render();
   const pantalla = pantallaActual();
   if (pantalla === 'proyecto') { prepararPantallaProyecto(); return; }
-  if (pantalla === 'ecosistema') return;
+  if (pantalla === 'modo' || pantalla === 'ecosistema') return;
   if (pantalla === 'app') await entrarAlApp();
 }
 
@@ -4196,8 +5555,10 @@ document.addEventListener('click', (e) => {
   if (action === 'stop-prop') { e.stopPropagation(); return; }
   if (action === 'elegir-usuario') { elegirUsuario(id); return; }
   if (action === 'elegir-proyecto') { elegirProyecto(id); return; }
+  if (action === 'elegir-modo') { elegirModo(id); return; }
   if (action === 'elegir-ecosistema') { elegirEcosistema(id); return; }
   if (action === 'cambiar-de-proyecto') { cambiarDeProyecto(); return; }
+  if (action === 'toggle-modo') { toggleModo(); return; }
   if (action === 'toggle-ecosistema') { toggleEcosistema(); return; }
   if (action === 'toggle-expand') { toggleExpand(id); return; }
   if (action === 'dropdown-toggle') {
@@ -4330,6 +5691,12 @@ document.addEventListener('click', (e) => {
     item.repartoClaves = clavesDeCombos(combos);
     return;
   }
+  if (action === 'pd2-reparto-parejo') {
+    state.pd2RepartoFirma = null;
+    asegurarRepartoPd2();
+    renderCrucesV2();
+    return;
+  }
   if (action === 'pd-reparto-todo-aca') {
     const idx = Number(el.closest('[data-pieza-index]').dataset.piezaIndex);
     const item = state.pd2BulkItems[idx];
@@ -4357,9 +5724,29 @@ document.addEventListener('click', (e) => {
   if (action === 'pd-csv-confirmar') { confirmarCargaCsv(); return; }
   if (action === 'adm-crear-activo') { crearActivoAdmin(); return; }
   if (action === 'adm-crear-audiencia') { crearAudienciaAdmin(); return; }
+  if (action === 'hist-toggle') { toggleHistorialFila(id); return; }
+  if (action === 'hist-marcar-pautado') { e.stopPropagation(); marcarPautadoHistorial(id); return; }
+  if (action === 'pd2-plataforma-toggle') { togglePlataformaPd2(id); return; }
+  if (action === 'pd2-plataforma-continuar') { confirmarPlataformasPd2(); return; }
+  if (action === 'pd2-plataforma-cambiar') { state.pd2PlataformaElegida = false; renderTabPedido2(); return; }
+  if (action === 'usu-proyecto-estado') { cambiarEstadoProyectoPanel(id, el.dataset.estado); return; }
+  if (action === 'usu-crear') { crearUsuarioPanel(); return; }
+  if (action === 'usu-seleccionar') { seleccionarUsuarioPanel(id); return; }
+  if (action === 'usu-guardar') { guardarUsuarioPanel(); return; }
+  if (action === 'usu-recargar') { cargarPanelUsuarios(true); return; }
 });
 
 document.addEventListener('change', (e) => {
+  // Panel Usuarios: rol/habilitado/accesos del usuario seleccionado — se
+  // acumulan en state.usuEdit y recién van al server con "Guardar".
+  if (e.target.id === 'hist-activo') { state.historial.activo = e.target.value; render(); return; }
+  if (e.target.id === 'usu-edit-rol') { if (state.usuEdit) { state.usuEdit.rol = e.target.value; renderTabUsuarios(); } return; }
+  if (e.target.id === 'usu-edit-habilitado') { if (state.usuEdit) state.usuEdit.habilitado = e.target.checked; return; }
+  if (e.target.id === 'usu-edit-nombre') { if (state.usuEdit) state.usuEdit.nombre = e.target.value; return; }
+  if (e.target.dataset && e.target.dataset.usuProyecto !== undefined) {
+    toggleAccesoPanel(e.target.dataset.usuProyecto, e.target.dataset.usuActivo || '', e.target.checked);
+    return;
+  }
   if (e.target.id === 'pd-csv-archivo') {
     const archivo = e.target.files && e.target.files[0];
     if (archivo) subirCsv(archivo);
@@ -4367,14 +5754,32 @@ document.addEventListener('change', (e) => {
     return;
   }
   if (e.target.id === 'pd-csv-proyecto') { cambiarProyectoCsv(e.target.value); return; }
-  if (e.target.id === 'pd-csv-activo') { state.pdActivoKey = e.target.value; return; }
+  if (e.target.id === 'pd-csv-activo') { state.pdActivoKey = e.target.value; cargarAudienciasPorActivo(e.target.value); return; }
   if (e.target.id === 'pd2-proyecto') { cambiarProyectoPd2(e.target.value); return; }
-  if (e.target.id === 'pd2-activo') { state.pd2ActivoKey = e.target.value; return; }
-  if (e.target.id === 'pd2-tipo') { state.pd2TipoCodigo = e.target.value; return; }
+  if (e.target.id === 'pd2-activo') { cambiarActivoPd2(e.target.value); return; }
+  if (e.target.id === 'pd2-tipo') {
+    state.pd2TipoCodigo = e.target.value;
+    // Tipo "Pautas Army" (codigo 'Y') -> precargar como audiencia principal
+    // la que esté marcada tamaño "Army" para este activo (pedido del
+    // usuario, 2026-09-11) — no pisa si el activo no tiene ninguna Army.
+    if (e.target.value === 'Y') {
+      const army = (state.pdAudiencias || []).find((a) => a.tamano === 'Army');
+      if (army) {
+        state.pd2AudienciaCodigo = army.codigo;
+        const selAud = document.getElementById('pd2-audiencia');
+        if (selAud) selAud.value = army.codigo;
+        document.getElementById('pd2-otra-audiencia-wrap').hidden = true;
+        renderCrucesV2();
+      }
+    }
+    actualizarPresupuestoPreviewPd2();
+    return;
+  }
   if (e.target.id === 'pd2-eje') { state.pd2EjeCodigo = e.target.value; return; }
   if (e.target.id === 'pd2-audiencia') {
     state.pd2AudienciaCodigo = e.target.value;
     document.getElementById('pd2-otra-audiencia-wrap').hidden = e.target.value !== 'Otra';
+    actualizarPresupuestoPreviewPd2();
     // Las piezas ya creadas (Módulo 5 arranca con 1 antes de llegar acá)
     // todavía no tienen Audiencia principal — se las precarga con esta,
     // sin pisar una que ya se haya tocado a mano por pieza.
@@ -4399,7 +5804,7 @@ document.addEventListener('change', (e) => {
     // es imagen o video (son varias, no una) — Reels queda habilitado acá,
     // el servidor lo bloquea igual si corresponde (mismo criterio que
     // materialEsImagenConocida() en v1, que tampoco lo sabe hasta verificar).
-    const formatoInfo = state.pdFormatos.find((f) => f.appsheet_valor === e.target.value);
+    const formatoInfo = formatosPd2Disponibles().find((f) => f.appsheet_valor === e.target.value);
     state.pd2Placements = state.pd2Placements.filter((p) => placementDisponibleUI(formatoInfo, p, false));
     // Las piezas ya renderizadas quedan con el editor de Material (link/
     // archivo suelto vs. una fila por imagen) del Formato con el que se
@@ -4439,17 +5844,36 @@ document.addEventListener('change', (e) => {
     renderCrucesV2();
     return;
   }
-  if (e.target.dataset.action === 'pd2-toggle-cruce') {
-    const clave = e.target.dataset.clave;
-    // No se puede destildar el último cruce que queda: la pieza necesita
-    // al menos uno para poder pedirse.
-    const checkedCount = document.querySelectorAll('#pd2-cruces-wrap input[type=checkbox]:checked').length;
-    if (!e.target.checked && checkedCount === 0) {
-      e.target.checked = true;
-      return;
-    }
-    if (e.target.checked) delete state.pd2CombosExcluidos[clave];
-    else state.pd2CombosExcluidos[clave] = true;
+  // Reparto en dos niveles (ver repartoResueltoPd2): el slider de Objetivo
+  // mueve el % del total, el de Audiencia mueve el % DENTRO de ese objetivo.
+  // Se maneja en 'change' (o sea al soltar) a propósito: re-renderizar en
+  // 'input' cortaría el arrastre del slider.
+  if (e.target.dataset.action === 'pd2-obj-slider') {
+    const auds = audienciasDelPd2();
+    const activos = leerCheckboxes('pd2-objetivo-chk').filter((o) => auds.some((a) => !state.pd2CombosExcluidos[o + '|' + a.codigo]));
+    state.pd2RepartoObjetivo = moverPeso(state.pd2RepartoObjetivo || {}, activos, e.target.dataset.objetivo, parseFloat(e.target.value) || 0);
+    renderCrucesV2();
+    return;
+  }
+  if (e.target.dataset.action === 'pd2-aud-slider') {
+    const obj = e.target.dataset.objetivo;
+    const activas = audienciasDelPd2().filter((a) => !state.pd2CombosExcluidos[obj + '|' + a.codigo]).map((a) => a.codigo);
+    state.pd2RepartoAud = Object.assign({}, state.pd2RepartoAud);
+    state.pd2RepartoAud[obj] = moverPeso((state.pd2RepartoAud || {})[obj] || {}, activas, e.target.dataset.aud, parseFloat(e.target.value) || 0);
+    renderCrucesV2();
+    return;
+  }
+  if (e.target.dataset.action === 'pd2-excluir-cruce') {
+    const clave = e.target.dataset.objetivo + '|' + e.target.dataset.aud;
+    const excluidos = Object.assign({}, state.pd2CombosExcluidos);
+    if (e.target.checked) delete excluidos[clave];
+    else excluidos[clave] = true;
+    // No se puede dejar el pedido sin ningún cruce: tiene que quedar al
+    // menos uno para poder pedirlo.
+    const auds = audienciasDelPd2();
+    const quedaAlguno = leerCheckboxes('pd2-objetivo-chk').some((o) => auds.some((a) => !excluidos[o + '|' + a.codigo]));
+    if (!quedaAlguno) { e.target.checked = true; return; }
+    state.pd2CombosExcluidos = excluidos;
     renderCrucesV2();
     return;
   }
@@ -4533,6 +5957,7 @@ document.addEventListener('change', (e) => {
   if (e.target.dataset.action === 'pd-reparto-incluir') {
     const idx = Number(e.target.closest('[data-pieza-index]').dataset.piezaIndex);
     const item = state.pd2BulkItems[idx];
+    const combos = combosDePiezaV2(idx);
     const clave = e.target.dataset.clave;
     item.repartoExcluidos = Object.assign({}, item.repartoExcluidos);
     if (e.target.checked) {
@@ -4550,14 +5975,15 @@ document.addEventListener('change', (e) => {
     // Al sumar o sacar un conjunto se reparte parejo de nuevo entre los que
     // quedan — si no, el total dejaría de sumar 100 y habría que ir a
     // corregir a mano cada vez.
-    item.reparto = repartoConExclusionesV2(item, combosDePiezaV2(idx));
+    item.reparto = repartoConExclusionesV2(item, combos);
     return;
   }
   if (e.target.dataset.action === 'pd-reparto-slider') {
     const idx = Number(e.target.closest('[data-pieza-index]').dataset.piezaIndex);
     const item = state.pd2BulkItems[idx];
+    const combos = combosDePiezaV2(idx);
     const valor = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
-    item.reparto = repartoTrasMoverSliderV2(item, combosDePiezaV2(idx), e.target.dataset.clave, valor);
+    item.reparto = repartoTrasMoverSliderV2(item, combos, e.target.dataset.clave, valor);
     return;
   }
   if (e.target.dataset.action === 'toggle-select') {
@@ -4632,6 +6058,7 @@ document.getElementById('pantalla-proyecto-usuario-select').addEventListener('ch
 // dinámicamente al "Generar piezas" — delegado, no hay un listener directo
 // posible al momento en que se define este bloque).
 document.addEventListener('input', (e) => {
+  if (e.target.id === 'hist-buscar') { state.historial.busqueda = e.target.value; renderHistorialSheet(state.items.map((it) => buildVM(it))); return; }
   // Si se toca el material, lo verificado deja de valer: hay que volver a
   // verificar antes de poder crear.
   if (e.target.id && /^pd2bulk\d+-material$/.test(e.target.id) && state.pd2BulkPreviews) {

@@ -25,10 +25,15 @@ const ESTADOS_YA_RESUELTOS = ['confirmada', 'publicada', 'manual_hecha', ESTADO_
 const ESTADO_PEDIDO_PENDIENTE = 'pendiente';
 
 // "Plataforma" en AppSheet es el canal (Meta / YouTube / TikTok / X / ...),
-// puede venir multi-select ("Meta, Youtube"). Pautador solo procesa Meta —
-// el resto de los canales son otro flujo (ver sección 8 del .md).
+// puede venir multi-select ("Meta, Youtube"). Meta es lo que PAUTADOR
+// publica solo; desde el punto 4 del plan también se piden Youtube/Tik
+// Tok/X/Display por Pedido Normal (quedan manual_pendiente y se marcan
+// hechas desde Historial), así que también entran acá. Lo que no es
+// ninguna de esas (filas viejas de AppSheet con otros canales) queda afuera.
+const { PLATAFORMAS } = require('../config/plataformas');
+const PLATAFORMAS_CONOCIDAS = PLATAFORMAS.map((p) => p.nombre.toLowerCase());
 function esParaMeta(fila) {
-  return parseLista(fila.plataforma).some((p) => p.toLowerCase() === 'meta');
+  return parseLista(fila.plataforma).some((p) => PLATAFORMAS_CONOCIDAS.includes(p.toLowerCase()));
 }
 
 async function getPendientes() {
@@ -43,6 +48,19 @@ async function getPendientes() {
 async function getPautaPorId(correlationId) {
   const filas = await readTable('cola_pautas');
   return filas.find((f) => f.correlation_id === correlationId) || null;
+}
+
+// Nombre de audiencia "limpio" para mostrar (selects, nomenclatura,
+// audiencia_resuelta): saca CUALQUIER paréntesis aclaratorio que traigan
+// algunos nombres reales de Meta o de nuestros propios fallback, esté al
+// final o en el medio (ej. "Trabajadores... (nacionales, provinciales,
+// municipales, etc.) de la Provincia del Chubut" -> "Trabajadores... de la
+// Provincia del Chubut"). Solo saca paréntesis — no toca nombres largos sin
+// paréntesis (esos son el nombre real de la audiencia, no ruido nuestro).
+function limpiarNombreAudiencia(nombre) {
+  if (!nombre) return nombre;
+  const limpio = nombre.replace(/\s*\([^)]*\)/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  return limpio || nombre;
 }
 
 // Resuelve una audiencia (principal o refuerzo) contra equiv_audiencia del activo.
@@ -62,7 +80,7 @@ function resolverAudiencia(codigo, textoLibre, audienciasActivo, tipo) {
   return {
     tipo,
     codigo,
-    nombre: match ? match.nombre_display : codigo,
+    nombre: match ? limpiarNombreAudiencia(match.nombre_display) : codigo,
     manual: !match,
     saved_audience_id: match ? match.saved_audience_id : null,
     // Junto con el Tipo (Intensidad), define el presupuesto sugerido — ver
@@ -106,6 +124,16 @@ async function getMatrizParaPauta(pauta) {
     (a, i) => audienciasCrudas.findIndex((b) => b.codigo === a.codigo) === i
   );
 
+  // "Pedido de Anuncios Normal" (modo manual — ver crearPedido en
+  // pedidos.js y el comentario en middleware/usuarioActual.js): ninguna
+  // celda se publica sola por la API de Meta, sin importar si la audiencia
+  // elegida es una guardada de verdad o no — se cargan a mano en Meta y se
+  // marcan "hecho" desde Validación, mismo mecanismo que ya existía para
+  // audiencia "Otra", ahora también se activa por modo.
+  if (pauta.modo === 'normal') {
+    audiencias.forEach((a) => { a.manual = true; });
+  }
+
   const presupuestoTotal = Number(pauta.presupuesto) || 0;
 
   // Cruces que el PM/Cuentas desactivó al pedir (ver moduloValido/Módulo 2
@@ -141,6 +169,27 @@ async function getMatrizParaPauta(pauta) {
     };
   }
 
+  // Reparto elegido a mano con los sliders (ver renderFilaReparto en
+  // app.js) — JSON {"Objetivo|codigo_audiencia": pct}, mismo formato de
+  // clave que combos_excluidos. Se usa SOLO si cubre exactamente las
+  // celdas que quedaron (ni de más ni de menos) y suma 100 — cualquier
+  // otro caso (falta, viejo por un cambio de Objetivo/Audiencia después de
+  // armarlo, no suma 100) cae al reparto automático de siempre, nunca
+  // rompe el pedido por esto.
+  let repartoCustom = null;
+  try {
+    const crudo = pauta.reparto ? JSON.parse(pauta.reparto) : null;
+    if (crudo && typeof crudo === 'object') {
+      const claves = combosCrudos.map((c) => `${c.objetivo}|${c.audiencia.codigo}`);
+      const cubreTodas = claves.length === Object.keys(crudo).length
+        && claves.every((k) => Number.isFinite(crudo[k]));
+      const suma = claves.reduce((a, k) => a + (Number(crudo[k]) || 0), 0);
+      if (cubreTodas && Math.abs(suma - 100) < 0.5) repartoCustom = crudo;
+    }
+  } catch (e) {
+    repartoCustom = null; // JSON inválido — mismo criterio que "no hay reparto"
+  }
+
   const principalCombos = combosCrudos.filter((c) => c.audiencia.tipo === 'principal');
   const refuerzoCombos = combosCrudos.filter((c) => c.audiencia.tipo !== 'principal');
   // Con 2 o más audiencias, la Principal arranca con el 70% del presupuesto
@@ -148,10 +197,17 @@ async function getMatrizParaPauta(pauta) {
   // reparte parejo entre los refuerzos — para que no arranque en pie de
   // igualdad con ellos. Con una sola audiencia (o si algún grupo quedó
   // vacío por combos_excluidos), se reparte parejo entre todas las celdas,
-  // como antes.
-  const celdas = principalCombos.length && refuerzoCombos.length
-    ? repartirParejo(principalCombos, 70).concat(repartirParejo(refuerzoCombos, 30))
-    : repartirParejo(combosCrudos, 100);
+  // como antes. El reparto a mano (arriba) pisa todo esto cuando es válido.
+  const celdas = repartoCustom
+    ? combosCrudos.map((c) => ({
+      objetivo: c.objetivo,
+      audiencia: c.audiencia,
+      porcentaje: Number(repartoCustom[`${c.objetivo}|${c.audiencia.codigo}`]),
+      manual: c.audiencia.manual,
+    }))
+    : (principalCombos.length && refuerzoCombos.length
+      ? repartirParejo(principalCombos, 70).concat(repartirParejo(refuerzoCombos, 30))
+      : repartirParejo(combosCrudos, 100));
   celdas.forEach((c) => {
     c.monto = +((presupuestoTotal * c.porcentaje) / 100).toFixed(2);
   });
@@ -167,6 +223,7 @@ module.exports = {
   getPautaPorId,
   getMatrizParaPauta,
   resolverAudiencia,
+  limpiarNombreAudiencia,
   parseLista,
   esParaMeta,
   ESTADO_PEDIDO_PENDIENTE,

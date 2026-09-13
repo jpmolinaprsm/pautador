@@ -79,4 +79,66 @@ async function getPublicacionesRecientes(activo) {
   return [...fb, ...ig].sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
 }
 
-module.exports = { getPublicacionesRecientes };
+// Saca de un link de Facebook pegado a mano (el que da "Copiar enlace" en
+// un posteo) el identificador que hace falta para volver a pedírselo a
+// Graph. OJO: esto NO es directamente comparable contra los "id" que trae
+// getPostsFacebook (ver resolverPostDesdeLink) — "story_fbid" viene en
+// formato "pfbid..." (un token opaco que Meta usa en los links para no
+// exponer el id numérico real) y el id que devuelve /{page_id}/posts es
+// otro numérico distinto. Solo Graph sabe traducir uno al otro.
+function extraerIdFacebookDesdeLink(link) {
+  try {
+    const u = new URL(String(link || '').trim());
+    const host = u.hostname.replace(/^www\./, '').replace(/^m\./, '');
+    if (host !== 'facebook.com') return null;
+    const storyFbid = u.searchParams.get('story_fbid');
+    if (storyFbid) return storyFbid;
+    const v = u.searchParams.get('v');
+    if (v) return v;
+    const m = u.pathname.match(/\/(?:posts|videos|photos)\/(?:[^/]+\/)?([a-zA-Z0-9]+)/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+// Resuelve el link pegado en "Pegar link" (Público) contra el posteo real
+// en Meta — a diferencia de getPostsFacebook (últimos 12), sirve para
+// CUALQUIER posteo de la página sin importar qué tan viejo sea. La consulta
+// que funciona es GET /{page_id}_{id-del-link} con el token de la Página —
+// pedirle a Graph el id del link solo (sin el page_id adelante) tira error
+// "(#12) singular statuses API is deprecated" en vez de resolver el post.
+async function resolverPostDesdeLink(activo, link) {
+  const idPost = extraerIdFacebookDesdeLink(link);
+  if (!idPost) {
+    const err = new Error('No pudimos identificar el posteo en ese link. Pegá el link que te da el botón "Copiar enlace" del posteo en Facebook.');
+    err.status = 400;
+    throw err;
+  }
+  if (!esIdValido(activo.page_id)) {
+    const err = new Error('Este activo todavía no tiene una página de Facebook conectada.');
+    err.status = 400;
+    throw err;
+  }
+  const pageToken = await getPageAccessToken(activo.page_id);
+  const url = new URL(`https://graph.facebook.com/${require('../config/env').metaGraphApiVersion}/${activo.page_id}_${idPost}`);
+  url.searchParams.set('fields', 'id,message,created_time,full_picture,permalink_url');
+  url.searchParams.set('access_token', pageToken);
+  const res = await fetch(url.toString());
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(`Meta no encontró ese posteo en esta página (${data.error.message}).`);
+    err.status = 400;
+    throw err;
+  }
+  return {
+    id: data.id,
+    plataforma: 'Facebook',
+    caption: data.message || '',
+    imagen: data.full_picture || '',
+    permalink: data.permalink_url || link,
+    fecha: data.created_time,
+  };
+}
+
+module.exports = { getPublicacionesRecientes, resolverPostDesdeLink };

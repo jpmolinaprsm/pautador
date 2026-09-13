@@ -1,11 +1,17 @@
 const express = require('express');
-const { getActivos, getActivoPorKey, ACTIVO_EJECUCION } = require('../services/configActivos');
-const { getPublicacionesRecientes } = require('../services/metaContent');
+const { getActivos, getActivoPorKey } = require('../services/configActivos');
+const { getPublicacionesRecientes, resolverPostDesdeLink } = require('../services/metaContent');
+const { limpiarNombreAudiencia } = require('../services/colaPautas');
+const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config/mvp');
+const { PLATAFORMAS, MODO_POR_FORMATO, categoriasPara } = require('../config/plataformas');
+const { volumenPorProyectoDesde } = require('../services/codigosSheet');
+const { proyectosVisibles } = require('../services/proyectos');
 const { generarSiguienteCodigo } = require('../services/codigoGenerator');
 const { readTable, insertarFila } = require('../services/dataSource');
 const { getLimitesCuenta } = require('../services/metaLimites');
+const { resolverPresupuestoPorTipo } = require('../services/escalaPresupuestos');
 
-const { proyectosPermitidos } = require('../services/usuarios');
+const { proyectosPermitidos, tieneAccesoAActivo } = require('../services/usuarios');
 const { requireRol } = require('../middleware/usuarioActual');
 const env = require('../config/env');
 
@@ -22,12 +28,46 @@ function slugify(s) {
     .replace(/^-+|-+$/g, '');
 }
 
-// GET /api/activos — selector de activos (opcionalmente filtrado por ?proyecto=)
+// GET /api/activos — selector de activos (opcionalmente filtrado por
+// ?proyecto=). ?soloHabilitados=1 (recorte a MVP, ver src/config/mvp.js)
+// filtra además por activo_habilitado=true — es opt-in a propósito: lo usa
+// el picker de "Pedido de Pauta"/"Crear Anuncios", pero la pantalla de
+// administración (alta de Activos/Audiencias) sigue viendo TODOS, para
+// poder precargarle audiencias a un activo antes de habilitarlo.
 router.get('/activos', async (req, res) => {
   try {
     const activos = await getActivos();
-    const filtrados = req.query.proyecto ? activos.filter((a) => a.proyecto === req.query.proyecto) : activos;
-    res.json(filtrados.map((a) => ({
+    let filtrados = req.query.proyecto ? activos.filter((a) => a.proyecto === req.query.proyecto) : activos;
+    if (req.query.soloHabilitados === '1') {
+      filtrados = filtrados.filter((a) => a.activo_habilitado === true);
+    }
+    // Accesos por activo (Panel Usuarios): un PM/Implementador solo ve los
+    // activos que tiene asignados — un admin ve todos. Sin usuario (ej.
+    // curl de prueba) no se filtra: son datos de referencia.
+    if (req.usuario) {
+      filtrados = filtrados.filter((a) => tieneAccesoAActivo(req.usuario, a.proyecto, a.activo_key));
+    }
+    // Pedido Normal: el selector de Activo se acota al Ecosistema elegido
+    // usando el histórico de AppSheet (punto 7: ecosistema_historico
+    // Oficial/Informativo/Mixto — un Mixto aparece en los dos; sin dato,
+    // aparece siempre). Solo en modo normal: automatizado no elige
+    // Ecosistema y el header podría venir viejo de otra sesión.
+    // Desde 2026-09-11 ("prendé Oficial") el modo automatizado también
+    // pregunta Ecosistema, así que el filtro aplica en los dos modos.
+    // ?todos=1 (pestaña de administración "Agregar Activos / Audiencias"):
+    // sin recorte por canal — ahí se cargan audiencias a cualquier activo.
+    if (req.query.todos !== '1' && (req.ecosistemaActivo === 'Oficial' || req.ecosistemaActivo === 'Informativo')) {
+      filtrados = filtrados.filter((a) => !a.ecosistema_historico || a.ecosistema_historico === 'Mixto' || a.ecosistema_historico === req.ecosistemaActivo);
+    }
+    // Ordenado por Proyecto y después por Activo — así quedan agrupados
+    // aunque el select ya no muestre el prefijo "Proyecto — " (se sacó a
+    // pedido del usuario), en vez del orden de inserción de la base.
+    const ordenados = [...filtrados].sort((a, b) => {
+      const p = (a.proyecto || '').localeCompare(b.proyecto || '', 'es');
+      if (p !== 0) return p;
+      return (a.activo || a.activo_key || '').localeCompare(b.activo || b.activo_key || '', 'es');
+    });
+    res.json(ordenados.map((a) => ({
       activo_key: a.activo_key,
       proyecto: a.proyecto,
       activo: a.activo || a.activo_key,
@@ -102,6 +142,38 @@ router.get('/proyectos', async (req, res) => {
       const permitidos = proyectosPermitidos(req.usuario);
       if (permitidos !== 'todos') proyectos = proyectos.filter((p) => permitidos.includes(p));
     }
+    // Visibles según actividad (sin códigos en el último mes y medio → no
+    // aparece) y la decisión manual de un admin (Activar / Desactivar en
+    // Panel Usuarios → Proyectos) — ver services/proyectos.js.
+    const visibles = await proyectosVisibles();
+    proyectos = proyectos.filter((p) => visibles.has(p));
+    // Clientes apagados por ahora (CLIENTES_OCULTOS, ej. Córdoba hasta que
+    // tenga su módulo) — se esconden todos sus proyectos.
+    if (env.clientesOcultos.length) {
+      const clienteDe = {};
+      activos.forEach((a) => { if (a.proyecto && a.cliente && !clienteDe[a.proyecto]) clienteDe[a.proyecto] = a.cliente; });
+      proyectos = proyectos.filter((p) => !env.clientesOcultos.includes(clienteDe[p] || ''));
+    }
+    // ?detalle=1: con el Cliente de cada proyecto (config_activos.cliente,
+    // migración 008) — la pantalla de Proyecto los agrupa por cliente.
+    // Con volumen15 = códigos de los últimos 15 días en CodigosContenido,
+    // ordenados de mayor a menor (después por nombre).
+    if (req.query.detalle === '1') {
+      const clientePor = {};
+      activos.forEach((a) => { if (a.proyecto && a.cliente && !clientePor[a.proyecto]) clientePor[a.proyecto] = a.cliente; });
+      const desde = new Date(Date.now() - 15 * 86400000).toISOString().slice(0, 10);
+      const volumen = (await volumenPorProyectoDesde(desde)) || {};
+      return res.json(proyectos
+        .map((p) => ({
+          proyecto: p,
+          cliente: clientePor[p] || '',
+          volumen15: volumen[p] || 0,
+          // Solo canal Informativo (CLIENTES_SOLO_INFORMATIVO, ej. Córdoba): la
+          // pantalla de Canal apaga "Oficial" con la leyenda.
+          soloInformativo: env.clientesSoloInformativo.includes(clientePor[p] || ''),
+        }))
+        .sort((a, b) => b.volumen15 - a.volumen15 || a.proyecto.localeCompare(b.proyecto, 'es')));
+    }
     res.json(proyectos);
   } catch (err) {
     console.error('[proyectos]', err.message);
@@ -109,13 +181,16 @@ router.get('/proyectos', async (req, res) => {
   }
 });
 
-// GET /api/limites — el mínimo de presupuesto que exige Meta, leído en vivo de
-// la cuenta publicitaria donde se ejecuta. Lo usa el formulario para avisar
-// (y bloquear) antes de crear algo que Meta va a rechazar. Devuelve
-// minDiario en 0 si no se pudo leer: en ese caso la UI no avisa nada.
+// GET /api/limites?activo_key=... — el mínimo de presupuesto que exige
+// Meta, leído en vivo de la cuenta publicitaria de ESE activo. Lo usa el
+// formulario para avisar (y bloquear) antes de crear algo que Meta va a
+// rechazar. Sin activo_key (ej. la primera carga de la pantalla, antes de
+// elegir Activo) devuelve el default en 0 — no hay cuenta todavía de la
+// que leer. Devuelve minDiario en 0 si no se pudo leer: en ese caso la UI
+// no avisa nada.
 router.get('/limites', async (req, res) => {
   try {
-    const activo = await getActivoPorKey(ACTIVO_EJECUCION);
+    const activo = req.query.activo_key ? await getActivoPorKey(req.query.activo_key) : null;
     const limites = await getLimitesCuenta(activo && activo.ad_account_id);
     res.json(limites || { minDiario: 0, moneda: '' });
   } catch (err) {
@@ -145,10 +220,26 @@ router.get('/ejes', async (req, res) => {
 router.get('/tipos', async (req, res) => {
   try {
     const tipos = await readTable('equiv_tipo');
-    const filtrados = req.ecosistemaActivo && req.ecosistemaActivo !== 'TODOS'
+    const porEcosistema = req.ecosistemaActivo && req.ecosistemaActivo !== 'TODOS'
       ? tipos.filter((t) => t.ecosistema === req.ecosistemaActivo)
       : tipos;
-    res.json(filtrados.map((t) => ({ codigo: t.codigo, nombre: t.tipo_campana, ecosistema: t.ecosistema })));
+    // Recorte a MVP, SOLO en modo "automatizado": Intensidad Media/Baja, más
+    // "Pautas Army" (monto fijo, entra aparte — ver esTipoPermitidoAutomatizado
+    // en src/config/mvp.js). En modo "normal" (o sin modo elegido) se ven
+    // todos los Tipos del ecosistema — "normal" incluye lo del
+    // automatizado, no tiene restricción propia.
+    const filtrados = (req.modoActivo === 'automatizado'
+      ? porEcosistema.filter(esTipoPermitidoAutomatizado)
+      : porEcosistema)
+      // "0 – Automatización" no se elige a mano: es el Tipo de las pautas que
+      // llegan solas desde las hojas salida_manual_* (Noticia Franca, El
+      // Norte Ahora, Valle 24). La ingesta lo usa directo, sin pasar por acá.
+      .filter((t) => String(t.codigo) !== '0');
+    // Los Tipos Oficiales se llaman por la letra (A/B/C) en la tabla — para
+    // el desplegable se muestran "B - Media" (letra - intensidad, pedido del
+    // usuario 2026-09-12); lo que se escribe en Tareas no cambia.
+    const nombreDe = (t) => (String(t.tipo_campana || '').length === 1 && t.intensidad ? `${t.tipo_campana} - ${t.intensidad}` : t.tipo_campana);
+    res.json(filtrados.map((t) => ({ codigo: t.codigo, nombre: nombreDe(t), ecosistema: t.ecosistema })));
   } catch (err) {
     console.error('[tipos]', err.message);
     res.status(500).json({ error: 'No se pudo leer equiv_tipo', detalle: err.message });
@@ -204,11 +295,40 @@ router.get('/formatos', async (req, res) => {
   }
 });
 
+// GET /api/plataformas — Pedido Normal: qué plataformas se pueden pedir y,
+// para cada una, formatos/objetivos/campos (ver src/config/plataformas.js).
+// Meta manda formatos/objetivos en null: el front usa /formatos y
+// /objetivos como siempre. En modo automatizado solo existe Meta.
+router.get('/plataformas', (req, res) => {
+  // En automatizado se devuelven todas igual, marcadas: la cuadrícula las
+  // muestra apagadas ("solo en Pedido Normal") en vez de esconderlas.
+  res.json(PLATAFORMAS.map((p) => ({
+    nombre: p.nombre,
+    soloNormal: p.nombre !== 'Meta',
+    habilitada: req.modoActivo !== 'automatizado' || p.nombre === 'Meta',
+    formatos: p.formatos,
+    objetivos: p.objetivos,
+    placements: !!p.placements,
+    soloVideo: !!p.soloVideo,
+    requiereLink: !!p.requiereLink,
+    medidas: p.medidas || [],
+    ayudaMaterial: p.ayudaMaterial || '',
+    // modo (imagen/video/carrusel) de cada formato — el front lo usa para
+    // ofrecer solo los formatos que comparten las plataformas elegidas.
+    modos: MODO_POR_FORMATO[p.nombre] || {},
+    categorias: Object.fromEntries(Object.keys(p.categoriaPor || {}).map((f) => [f, categoriasPara(p.nombre, f)])),
+  })));
+});
+
 // GET /api/objetivos — equiv_objetivo, para el desplegable de Objetivo
 router.get('/objetivos', async (req, res) => {
   try {
     const objetivos = await readTable('equiv_objetivo');
-    res.json(objetivos.map((o) => o.appsheet_valor));
+    // Recorte a MVP, SOLO en modo "automatizado" — ver src/config/mvp.js.
+    const filtrados = req.modoActivo === 'automatizado'
+      ? objetivos.filter((o) => OBJETIVOS_PERMITIDOS.includes(o.appsheet_valor))
+      : objetivos;
+    res.json(filtrados.map((o) => o.appsheet_valor));
   } catch (err) {
     console.error('[objetivos]', err.message);
     res.status(500).json({ error: 'No se pudo leer equiv_objetivo', detalle: err.message });
@@ -221,10 +341,36 @@ router.get('/audiencias', async (req, res) => {
   try {
     const todas = await readTable('equiv_audiencia');
     const del_activo = todas.filter((a) => a.activo_key === req.query.activo_key);
-    res.json(del_activo.map((a) => ({ codigo: a.codigo_audiencia, nombre: a.nombre_display })));
+    // Orden alfabético (antes salían en orden de carga).
+    res.json(del_activo.map((a) => ({
+      codigo: a.codigo_audiencia,
+      nombre: limpiarNombreAudiencia(a.nombre_display),
+      tamano: a['tamaño'] || '',
+    })).sort((x, y) => x.nombre.localeCompare(y.nombre, 'es')));
   } catch (err) {
     console.error('[audiencias]', err.message);
     res.status(500).json({ error: 'No se pudo leer equiv_audiencia', detalle: err.message });
+  }
+});
+
+// GET /api/presupuesto-preview?activoKey=&tipoCodigo=&audienciaCodigo= —
+// "Pedido de Pauta" nunca elige el presupuesto a mano (lo resuelve el
+// servidor recién al confirmar, ver resolverPresupuestoPorTipo), pero el
+// panel de reparto por sliders necesita mostrar montos en pesos mientras
+// se mueven — este endpoint solo LEE el mismo cálculo, no escribe nada.
+router.get('/presupuesto-preview', async (req, res) => {
+  try {
+    const { activoKey, tipoCodigo, audienciaCodigo } = req.query;
+    if (!activoKey || !tipoCodigo || !audienciaCodigo) {
+      return res.json({ presupuesto: null });
+    }
+    const presupuesto = await resolverPresupuestoPorTipo(tipoCodigo, activoKey, audienciaCodigo);
+    res.json({ presupuesto });
+  } catch (err) {
+    // Mismos motivos que ya explica resolverPresupuestoPorTipo (sin tamaño
+    // cargado, Tipo sin Intensidad, etc.) — no es un error de servidor, es
+    // "todavía no se puede calcular", el front lo trata como "sin preview".
+    res.json({ presupuesto: null, motivo: err.message });
   }
 });
 
@@ -280,6 +426,26 @@ router.get('/publicaciones', requireRol('pm_cuentas', 'implementador', 'administ
   } catch (err) {
     console.error('[publicaciones]', err.message);
     res.status(500).json({ error: 'No se pudieron leer las publicaciones', detalle: err.message });
+  }
+});
+
+// POST /api/publicaciones/resolver — resuelve el link que se pega a mano en
+// "Pegar link" (Público) contra el posteo real en Meta, sin depender de que
+// esté entre los últimos 12 que trae GET /publicaciones (ver
+// resolverPostDesdeLink: el link "Copiar enlace" trae un id que solo Graph
+// sabe traducir al post real).
+router.post('/publicaciones/resolver', requireRol('pm_cuentas', 'implementador', 'administrador'), async (req, res) => {
+  if (!env.metaAccessToken) {
+    return res.status(400).json({ error: 'No hay META_ACCESS_TOKEN configurado — hace falta para leer publicaciones de Meta.' });
+  }
+  try {
+    const activo = await getActivoPorKey(req.body.activo_key);
+    if (!activo) return res.status(404).json({ error: `No existe el activo "${req.body.activo_key}"` });
+    const post = await resolverPostDesdeLink(activo, req.body.link);
+    res.json(post);
+  } catch (err) {
+    console.error('[publicaciones-resolver]', err.message);
+    res.status(err.status || 500).json({ error: 'No se pudo resolver ese link', detalle: err.message });
   }
 });
 

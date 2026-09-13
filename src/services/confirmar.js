@@ -8,9 +8,10 @@
 // IDs con prefijo MOCK-, real llama de verdad a Meta y siempre en PAUSED)
 // — este archivo no sabe ni le importa cuál de los dos está activo.
 
+const env = require('../config/env');
 const { readTable, appendRow, updateRow, updateRowWhere } = require('./dataSource');
 const { getPautaPorId, getMatrizParaPauta, ESTADO_DESESTIMADA, ESTADO_DEVUELTA_PM, ESTADOS_YA_RESUELTOS } = require('./colaPautas');
-const { getActivoEjecucion } = require('./configActivos');
+const { getActivoPorKey } = require('./configActivos');
 const metaAdapter = require('./metaAdapter');
 const { nomenclaturaCampania, nomenclaturaAdset } = require('./nomenclatura');
 
@@ -25,6 +26,13 @@ const ESTADO_CELDA_MANUAL_PENDIENTE = 'manual_pendiente';
 const ESTADO_CELDA_MANUAL_HECHA = 'manual_hecha';
 const ESTADOS_CELDA_CERRADA = [ESTADO_CELDA_PUBLICADA, ESTADO_CELDA_MANUAL_HECHA, 'manual'];
 
+// config_activos todavía tiene placeholders tipo "⚠️ BUSCAR EN BM" para los
+// campos sin completar — un id real de Meta es siempre numérico (ver el
+// mismo chequeo en metaAdapterReal.js/metaContent.js).
+function esIdValido(valor) {
+  return !!valor && /^\d+$/.test(String(valor).trim());
+}
+
 // Plataformas (FB/IG) resueltas: no viene de una tabla de equivalencia —
 // "Plataforma" en AppSheet es el CANAL (Meta/YouTube/TikTok/...), no el
 // placement dentro de Meta. Eso sale directo de config_activos, por activo
@@ -32,8 +40,8 @@ const ESTADOS_CELDA_CERRADA = [ESTADO_CELDA_PUBLICADA, ESTADO_CELDA_MANUAL_HECHA
 function derivarPlataformasResueltas(activo) {
   if (!activo) return '[]';
   const plats = [];
-  if (activo.page_id) plats.push('facebook');
-  if (activo.ig_actor_id) plats.push('instagram');
+  if (esIdValido(activo.page_id)) plats.push('facebook');
+  if (esIdValido(activo.ig_actor_id)) plats.push('instagram');
   if (plats.length) return JSON.stringify(plats);
   return JSON.stringify(String(activo.plataformas_default || '').split(',').map((s) => s.trim()).filter(Boolean));
 }
@@ -44,11 +52,10 @@ async function resolverEquivalencias(pauta) {
     readTable('equiv_objetivo'),
     readTable('equiv_formato'),
     readTable('equiv_tipo'),
-    // Etapa borrador: se publica SIEMPRE en el activo de ejecución (Tres
-    // Empanadas), aunque la pieza haya sido cargada para otro. Antes se
-    // usaba pauta.activo y las piezas de activos reales fallaban al
-    // confirmar, porque no tenemos acceso a esas cuentas publicitarias.
-    getActivoEjecucion(),
+    // Se publica sobre el activo REAL que se eligió al pedirla
+    // (pauta.activo, guardado por crearPedido) — cada Activo tiene su
+    // propio ad_account_id/page_id en config_activos.
+    getActivoPorKey(pauta.activo),
   ]);
 
   const formato = equivFormato.find((f) => f.appsheet_valor === pauta.formato);
@@ -92,7 +99,12 @@ async function confirmarPauta(correlationId, celdasEditadas, confirmadoPor) {
 
   const { equivObjetivo, equivTipo, formato, activo, plataformasResueltas } = await resolverEquivalencias(pauta);
   // formato va en el contexto porque define el placement (Feed vs Reels).
-  const ctxMeta = { activo, equivObjetivo, equivTipo, formato };
+  // estadoInicial: siempre PAUSED, salvo las pautas de la ingesta automática
+  // (origen 'ingesta') cuando el usuario haya puesto INGESTA_ESTADO_INICIAL=
+  // ACTIVE — es el único camino por el que algo puede salir gastando plata
+  // sin que una persona lo active a mano en Ads Manager.
+  const estadoInicial = pauta.origen === 'ingesta' ? env.ingestaEstadoInicial : 'PAUSED';
+  const ctxMeta = { activo, equivObjetivo, equivTipo, formato, estadoInicial };
   const confirmadoEn = new Date().toISOString();
 
   // Si una celda falla a mitad de la tanda (pasa: presupuesto bajo el mínimo
@@ -244,7 +256,11 @@ async function confirmarPauta(correlationId, celdasEditadas, confirmadoPor) {
     audiencia_resuelta: audienciaResuelta,
     plataformas_resueltas: plataformasResueltas,
     optimization_goal: optimizationGoal,
-    modo: formato ? formato.modo : '',
+    // OJO: acá antes se pisaba `modo` con el modo del Formato (imagen/
+    // video/carrusel). Pero cola_pautas.modo guarda automatizado/normal
+    // (ver pedidos.js y getMatrizParaPauta) — pisarlo hacía que un pedido
+    // Normal dejara de ser "normal" apenas se confirmaba. Nadie leía el
+    // modo del formato desde acá (bug encontrado en la revisión del P6).
     nomenclatura_preview: nomenclaturaPreview,
     errores_preview: '',
   });

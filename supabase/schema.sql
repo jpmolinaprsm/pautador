@@ -80,7 +80,11 @@ create table if not exists cola_pautas (
   redes                   text,
   material_stories        text, -- material específico para Stories cuando va junto con Feed/Reels con imágenes distintas (agregada en migration_003)
   comentarios             text, -- cuadro libre debajo de los módulos de "Pedido de Anuncios", lo ve el implementador al validar
-  combos_excluidos        text  -- cruces Objetivo|Audiencia que el PM desactivó al pedir ("Interacción|AR-GENERAL,Alcance Normal|Otra") — nunca se generan, ver colaPautas.js getMatrizParaPauta
+  combos_excluidos        text, -- cruces Objetivo|Audiencia que el PM desactivó al pedir ("Interacción|AR-GENERAL,Alcance Normal|Otra") — nunca se generan, ver colaPautas.js getMatrizParaPauta
+  reparto                 text, -- JSON {"Objetivo|codigo_audiencia": pct} elegido a mano con los sliders (agregada en migration_004) — si falta o no suma 100, cae al reparto parejo/70-30 de siempre
+  origen                  text default 'pedido', -- 'pedido' | 'csv' | 'ingesta' (hojas salida_manual_*; único origen que puede crear ACTIVO en Meta) — migration_005
+  tareas_replicado        boolean default false, -- ya se escribió en la hoja "Tareas" (Make → Asana) — migration_005
+  tareas_error            text  -- motivo si la réplica a "Tareas" falló; el job periódico reintenta — migration_005
 );
 
 -- ============================================================
@@ -228,12 +232,26 @@ create table if not exists campanas_meta (
 -- usuarios — roles y proyectos permitidos (reemplaza permisos_pautador)
 -- ============================================================
 create table if not exists usuarios (
-  id          text primary key,
-  nombre      text,
-  rol         text,
-  proyectos   text,
-  email       text unique
+  id            text primary key,
+  nombre        text,
+  rol           text,                    -- pm_cuentas | implementador | administrador
+  proyectos     text,                    -- LEGACY: "todos" para admins, vacío para el resto (migración 007); la fuente de verdad es usuario_accesos
+  email         text unique,
+  es_superadmin boolean default false,   -- único que designa/revoca administradores (migración 007)
+  habilitado    boolean default true     -- false = no entra, conserva historial (migración 007)
 );
+
+-- usuario_accesos — Panel Usuarios (migración 007): qué Proyectos y Activos
+-- ve cada usuario no-admin. activo_key NULL = todos los activos del proyecto.
+create table if not exists usuario_accesos (
+  id          bigserial primary key,
+  usuario_id  text not null references usuarios(id) on delete cascade,
+  proyecto    text not null,
+  activo_key  text,
+  creado_en   timestamptz default now(),
+  creado_por  text
+);
+create unique index if not exists idx_usuario_accesos_unico on usuario_accesos (usuario_id, proyecto, coalesce(activo_key, ''));
 
 -- ============================================================
 -- Índices de lectura frecuente (no son constraints, solo velocidad)
@@ -242,3 +260,43 @@ create index if not exists idx_cola_pautas_proyecto on cola_pautas (proyecto);
 create index if not exists idx_cola_pautas_estado on cola_pautas (estado);
 create index if not exists idx_matriz_correlation on matriz_distribucion (correlation_id);
 create index if not exists idx_campanas_meta_busqueda on campanas_meta (activo_key, eje, objetivo);
+
+-- ============================================================
+-- creatividades — archivos en Supabase Storage, bucket privado (migration_006)
+-- ============================================================
+-- cola_pautas.material = "creatividad:<id>" apunta acá. 90 días y se borra
+-- (job en server.js). Ver services/storage.js.
+create table if not exists creatividades (
+  id               text primary key,
+  storage_path     text not null,
+  nombre_original  text,
+  content_type     text,
+  bytes            bigint,
+  width            integer,
+  height           integer,
+  origen           text default 'subida',     -- 'subida' | 'link'
+  link_original    text,
+  proyecto         text, activo_key text, codigo text, campana text, eje text, correlation_id text,
+  subido_por       text,
+  creado_en        timestamptz default now(),
+  expira_en        timestamptz,
+  borrado_en       timestamptz
+);
+create index if not exists idx_creatividades_expira on creatividades (expira_en) where borrado_en is null;
+create index if not exists idx_creatividades_correlation on creatividades (correlation_id);
+
+-- ============================================================
+-- ingesta_sheets — filas de salida_manual_* ya procesadas (migration_005)
+-- ============================================================
+-- fila_id = columna "Codigo" del Sheet (ej. GDCHAC0AG00262), única por fila.
+-- Garantiza que una misma fila nunca cree dos pautas aunque llegue por
+-- webhook (Apps Script) y por polling a la vez. Ver services/ingestaSheets.js.
+create table if not exists ingesta_sheets (
+  hoja            text not null,
+  fila_id         text not null,
+  correlation_id  text,
+  estado          text,        -- 'creada' | 'error' | 'ignorada'
+  error           text,
+  procesado_en    timestamptz default now(),
+  primary key (hoja, fila_id)
+);

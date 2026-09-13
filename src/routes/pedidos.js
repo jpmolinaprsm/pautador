@@ -2,9 +2,14 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const multer = require('multer');
+const { imageSize } = require('image-size');
 const { crearPedido } = require('../services/pedidos');
 const { verificarMaterial, clasificar } = require('../services/material');
+const storage = require('../services/storage');
 const { requireRol } = require('../middleware/usuarioActual');
+
+// Máximo por archivo del bucket "creatividades" (límite del plan de Supabase).
+const STORAGE_MAX_BYTES = 50 * 1024 * 1024;
 
 const router = express.Router();
 
@@ -31,11 +36,14 @@ const upload = multer({
   limits: { fileSize: TAMANO_MAXIMO_MB * 1024 * 1024 },
 });
 
-// POST /api/pedidos — "Pedido de Pauta" (PM/Cuentas). Entra directo a
-// "Validación de Anuncios" — no hay cola intermedia de pedidos sin procesar.
-router.post('/pedidos', requireRol('pm_cuentas', 'administrador'), async (req, res) => {
+// POST /api/pedidos — "Pedido de Anuncios". Publica en Meta en el mismo
+// request (ver crearPedido) — no hay cola intermedia. El Implementador
+// también entra por acá ahora (antes usaba /anuncios/crear-directo con
+// presupuesto manual, "Crear Anuncios" quedó redundante — ver TABS_POR_ROL
+// en app.js): mismo presupuesto automático por escala que PM/Cuentas.
+router.post('/pedidos', requireRol('pm_cuentas', 'implementador', 'administrador'), async (req, res) => {
   try {
-    const resultado = await crearPedido(req.body, req.usuario);
+    const resultado = await crearPedido(req.body, req.usuario, { modo: req.modoActivo });
     res.json(resultado);
   } catch (err) {
     console.error('[crear-pedido]', err.message);
@@ -58,7 +66,7 @@ router.post('/pedidos/validar-lote', requireRol('pm_cuentas', 'implementador', '
   for (let i = 0; i < filas.length; i += 1) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      await crearPedido(filas[i], req.usuario, { soloValidar: true, publicar });
+      await crearPedido(filas[i], req.usuario, { soloValidar: true, publicar, modo: req.modoActivo });
       resultados.push({ index: i, ok: true });
     } catch (err) {
       resultados.push({ index: i, ok: false, error: err.message });
@@ -77,7 +85,7 @@ router.post('/pedidos/lote', requireRol('pm_cuentas', 'administrador'), async (r
   for (let i = 0; i < filas.length; i += 1) {
     try {
       // eslint-disable-next-line no-await-in-loop
-      const resultado = await crearPedido(filas[i], req.usuario);
+      const resultado = await crearPedido(filas[i], req.usuario, { modo: req.modoActivo });
       resultados.push({ index: i, ok: true, correlationId: resultado.correlationId, codigo: resultado.codigo });
     } catch (err) {
       resultados.push({ index: i, ok: false, error: err.message });
@@ -86,19 +94,9 @@ router.post('/pedidos/lote', requireRol('pm_cuentas', 'administrador'), async (r
   res.json({ resultados });
 });
 
-// POST /api/anuncios/crear-directo — "Crear Anuncios" (Implementadores):
-// el camino alternativo. Arranca desde cero (sin pedido previo) y PUBLICA EN
-// META en el mismo request, sin pasar por Validación de Anuncios: quien carga
-// acá ya es quien valida. Por Validación solo pasan los pedidos de PM/Cuentas.
-router.post('/anuncios/crear-directo', requireRol('implementador', 'administrador'), async (req, res) => {
-  try {
-    const resultado = await crearPedido(req.body, req.usuario, { publicar: true });
-    res.json(resultado);
-  } catch (err) {
-    console.error('[crear-directo]', err.message);
-    res.status(err.status || 500).json({ error: 'No se pudo crear el anuncio', detalle: err.message });
-  }
-});
+// (2026-09-12) Se sacó POST /api/anuncios/crear-directo — la pestaña "Crear
+// Anuncios" (publicar directo con presupuesto a mano) era redundante con el
+// Pedido Automatizado. Todo entra por POST /api/pedidos.
 
 // POST /api/material/verificar — chequea el link del material antes de
 // crear nada: que se pueda abrir, que sea público y que sea imagen o video.
@@ -138,12 +136,56 @@ router.post('/material/subir', requireRol('pm_cuentas', 'implementador', 'admini
         detalle: `El archivo no es una imagen ni un video (es "${req.file.mimetype}").`,
       });
     }
+    // Medidas de la imagen (el front las usa para avisar/bloquear según las
+    // specs de Placement ANTES de confirmar — hasta ahora eso se descubría
+    // recién al subir a Meta). Si el parser no reconoce el formato, se sigue
+    // sin medidas: el front avisa que no pudo medir, no frena nada.
+    let width = null;
+    let height = null;
+    if (tipo === 'imagen') {
+      try {
+        const dim = imageSize(fs.readFileSync(req.file.path));
+        width = dim.width;
+        height = dim.height;
+      } catch (e) { /* sin medidas */ }
+    }
+
+    // CREATIVIDADES_STORAGE=1: el archivo va al bucket privado de Supabase
+    // (90 días, etiquetado al crear el pedido) y se referencia como
+    // "creatividad:<id>"; el disco solo se usa de paso. Con 0, sigue el
+    // camino viejo (../uploads) tal cual.
+    if (storage.habilitado()) {
+      if (req.file.size > STORAGE_MAX_BYTES) {
+        fs.unlink(req.file.path, () => {});
+        return res.status(400).json({ error: 'No se pudo subir el archivo', detalle: `El archivo pesa más de ${STORAGE_MAX_BYTES / 1024 / 1024} MB (máximo del storage).` });
+      }
+      return storage.subirCreatividad({
+        buffer: fs.readFileSync(req.file.path),
+        nombreOriginal: req.file.originalname,
+        contentType: req.file.mimetype,
+        width,
+        height,
+        origen: 'subida',
+        subidoPor: req.usuario ? req.usuario.nombre : '',
+      }).then((c) => {
+        fs.unlink(req.file.path, () => {});
+        res.json({ material: `creatividad:${c.id}`, tipo, contentType: req.file.mimetype, bytes: req.file.size, previewUrl: c.previewUrl, width, height, expira_en: c.expira_en });
+      }).catch((e) => {
+        fs.unlink(req.file.path, () => {});
+        res.status(500).json({ error: 'No se pudo guardar el archivo en el storage', detalle: e.message });
+      });
+    }
+
     res.json({
       material: `uploads/${req.file.filename}`,
       tipo,
       contentType: req.file.mimetype,
       bytes: req.file.size,
-      previewUrl: tipo === 'imagen' ? `/uploads/${req.file.filename}` : '',
+      // El video también tiene preview: el mock lo muestra con <video> y el
+      // front le lee videoWidth/videoHeight para las specs.
+      previewUrl: `/uploads/${req.file.filename}`,
+      width,
+      height,
     });
   });
 });

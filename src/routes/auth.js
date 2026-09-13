@@ -1,7 +1,7 @@
 const express = require('express');
 const { google } = require('googleapis');
 const env = require('../config/env');
-const { loginPorEmail, resolverUsuarioValidado } = require('../services/usuarios');
+const { loginPorEmail, resolverUsuarioValidado, serializarUsuario } = require('../services/usuarios');
 
 const router = express.Router();
 
@@ -66,7 +66,7 @@ router.get('/auth/google/callback', async (req, res) => {
 router.post('/api/auth/login', async (req, res) => {
   try {
     const usuario = await loginPorEmail(req.body.email);
-    res.json(usuario);
+    res.json(serializarUsuario(usuario));
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }

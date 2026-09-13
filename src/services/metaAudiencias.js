@@ -40,8 +40,27 @@ async function pedirTargeting(savedAudienceId) {
 // null si no hay nada que resolver (modo mock, sin ID, o falló la lectura —
 // un ID de prueba/inventado, borrado, o sin permiso). Nunca tira: quien
 // llama decide el fallback (el piso geo:AR) y deja rastro en el log.
+// "region:<key>" — audiencia geográfica de toda una provincia sin público
+// guardado en Meta (la app no puede crearlos por API, ver arriba). Es el
+// mismo targeting que usa el público real "Provincia del Chubut" de Gaceta
+// Patagónica (18-65, todos los géneros, región + home/recent). Keys de
+// Meta: Chaco 99, Santa Fe 117, Chubut 100, Catamarca 98.
+function targetingDeRegion(regionKey) {
+  return {
+    age_min: 18,
+    age_max: 65,
+    genders: [0],
+    geo_locations: {
+      regions: [{ key: String(regionKey), country: 'AR' }],
+      location_types: ['home', 'recent'],
+    },
+  };
+}
+
 async function getTargetingDeSavedAudience(savedAudienceId) {
   if (!savedAudienceId || env.metaMode !== 'real') return null;
+  const region = /^region:(\d+)$/.exec(String(savedAudienceId).trim());
+  if (region) return targetingDeRegion(region[1]);
   if (!cache.has(savedAudienceId)) cache.set(savedAudienceId, pedirTargeting(savedAudienceId));
   try {
     return await cache.get(savedAudienceId);

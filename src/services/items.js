@@ -7,8 +7,8 @@
 
 const { readTable } = require('./dataSource');
 const { getMatrizParaPauta, esParaMeta, ESTADO_PEDIDO_PENDIENTE } = require('./colaPautas');
-const { getActivoPorKey, getActivoEjecucion } = require('./configActivos');
-const { proyectosPermitidos } = require('./usuarios');
+const { getActivoPorKey } = require('./configActivos');
+const { proyectosPermitidos, tieneAccesoAActivo } = require('./usuarios');
 const { getLimitesCuenta, minimoPorConjunto } = require('./metaLimites');
 const { ESTADO_CELDA_MANUAL_PENDIENTE, ESTADOS_CELDA_CERRADA } = require('./confirmar');
 const { ESTADO_DESESTIMADA, ESTADO_DEVUELTA_PM } = require('./colaPautas');
@@ -129,18 +129,19 @@ async function getItemCompleto(pauta, matrizDistribucionCache, equivTipo) {
   const activo = await getActivoPorKey(pauta.activo);
   // Mínimo que Meta le va a exigir a CADA conjunto de esta pauta (una celda
   // de la matriz = un conjunto). La pantalla lo usa para avisar antes de
-  // confirmar, en vez de que Meta lo rechace 20 segundos después.
-  // Se lee de la cuenta donde REALMENTE se va a publicar (etapa borrador:
-  // siempre el activo de ejecución), no de la del activo solicitado.
-  const activoEjecucion = await getActivoEjecucion();
+  // confirmar, en vez de que Meta lo rechace 20 segundos después. Se lee
+  // de la cuenta donde REALMENTE se va a publicar — el activo real de esta
+  // pauta (pauta.activo), no uno fijo.
   const dias = diasDeDuracion(pauta, activo);
-  const limites = await getLimitesCuenta(activoEjecucion && activoEjecucion.ad_account_id);
+  const limites = await getLimitesCuenta(activo && activo.ad_account_id);
 
   return {
     correlation_id: pauta.correlation_id,
     codigo: pauta.codigo,
     activo: pauta.activo,
     activo_nombre: activo && activo.activo ? activo.activo : pauta.activo,
+    // Para el link "Ver en Ads Manager" del detalle (sin el prefijo act_).
+    ad_account_id: activo && /^act_\d+$/.test(String(activo.ad_account_id || '')) ? String(activo.ad_account_id).slice(4) : '',
     proyecto: pauta.proyecto,
     campana: pauta.campana,
     contenido: pauta.contenido,
@@ -198,6 +199,9 @@ async function getItemsCompletos(usuario, proyectoActivo) {
       esParaMeta(f) &&
       f.estado !== ESTADO_PEDIDO_PENDIENTE &&
       (permitidos === 'todos' || permitidos.includes(f.proyecto)) &&
+      // Accesos por activo (Panel Usuarios): dentro del proyecto, solo las
+      // piezas de los activos asignados.
+      (!usuario || tieneAccesoAActivo(usuario, f.proyecto, f.activo)) &&
       (!filtroProyecto || f.proyecto === filtroProyecto)
   );
   return Promise.all(pautas.map((p) => getItemCompleto(p, matrizDistribucion, equivTipo)));
@@ -220,4 +224,27 @@ async function getPendientesPorProyecto(usuario) {
   return conteos;
 }
 
-module.exports = { getItemsCompletos, getPendientesPorProyecto };
+// Detalle de cada pieza pendiente (mismo criterio que arriba) con lo que
+// hace falta para contar en CADA pantalla del onboarding: proyecto, modo,
+// ecosistema (por la letra del Tipo en el código → equiv_tipo) y
+// plataformas. El front agrega según lo ya elegido (pedido del usuario
+// 2026-09-11: "las notificaciones de lo pendiente en todas las pantallas de
+// cuadrícula, desde Proyecto a Canal").
+async function getPendientesDetalle(usuario) {
+  const [items, filas, tipos] = await Promise.all([getItemsCompletos(usuario, null), readTable('cola_pautas'), readTable('equiv_tipo')]);
+  const ecoDe = new Map(tipos.map((t) => [String(t.codigo), t.ecosistema]));
+  const porId = new Map(filas.map((f) => [f.correlation_id, f]));
+  return items
+    .filter((it) => it.estado === 'pendiente' || it.estado === 'pendiente_manual')
+    .map((it) => {
+      const f = porId.get(it.correlation_id) || {};
+      return {
+        proyecto: it.proyecto,
+        modo: f.modo === 'automatizado' ? 'automatizado' : 'normal',
+        ecosistema: ecoDe.get(String(f.codigo || '').charAt(6)) || '',
+        plataformas: String(f.plataforma || 'Meta').split(',').map((p) => p.trim()).filter(Boolean),
+      };
+    });
+}
+
+module.exports = { getItemsCompletos, getPendientesPorProyecto, getPendientesDetalle };

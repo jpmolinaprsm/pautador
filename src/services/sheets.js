@@ -67,6 +67,59 @@ async function appendRow(sheetName, rowValues) {
   });
 }
 
+// --- Acceso a OTRAS planillas (no la de configuración de env.sheetId) ---
+// Las usan la ingesta de salida_manual_* y la réplica a "Tareas" (punto 3
+// del plan): mismo cliente y misma Service Account, distinto spreadsheetId.
+
+// PROHIBIDO ESCRIBIR (orden del usuario, 2026-09-11): la planilla de
+// PRODUCCIÓN "Appsheet - Tareas de Asana", que lee Make para crear tareas
+// reales. Un reintento mal acotado le escribió 61 filas de prueba y
+// desfasó el trigger de Make. Cualquier escritura a este ID tira error,
+// sin importar qué diga el .env — solo el usuario, cuando lo decida, saca
+// el ID de esta lista.
+const PLANILLAS_PROHIBIDAS = new Set(['180z6MdtteHN0yuT_EI1AMKZ6fjdwU_EDArxbrkNRTMw']);
+function verificarEscrituraPermitida(spreadsheetId) {
+  if (PLANILLAS_PROHIBIDAS.has(String(spreadsheetId || '').trim())) {
+    throw new Error(`Escritura bloqueada: la planilla ${spreadsheetId} es de producción (Tareas de Asana) y está prohibida por el usuario.`);
+  }
+}
+
+/**
+ * Lee una pestaña entera de cualquier planilla y la devuelve como array de
+ * objetos (primera fila = encabezados), igual que readTable.
+ */
+async function readRange(spreadsheetId, sheetName) {
+  const sheets = await getClient();
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: sheetName });
+  const rows = res.data.values || [];
+  if (rows.length === 0) return [];
+  const [headers, ...body] = rows;
+  return body
+    .filter((row) => row.some((cell) => cell !== undefined && cell !== ''))
+    .map((row) => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = row[i] !== undefined ? row[i] : ''; });
+      return obj;
+    });
+}
+
+/**
+ * Agrega varias filas al final de una pestaña de cualquier planilla —
+ * valores posicionales, en el orden de columnas de esa hoja.
+ */
+async function appendRowsTo(spreadsheetId, sheetName, filas) {
+  verificarEscrituraPermitida(spreadsheetId);
+  if (!filas.length) return;
+  const sheets = await getClient();
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: sheetName,
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: filas },
+  });
+}
+
 /**
  * Actualiza campos de una fila existente. Sin probar todavía — modo google
  * no está en uso (ver README). Requiere ubicar el número de fila real antes
@@ -84,4 +137,4 @@ async function updateRowWhere() {
   );
 }
 
-module.exports = { readTable, appendRow, updateRow, updateRowWhere };
+module.exports = { readTable, appendRow, updateRow, updateRowWhere, readRange, appendRowsTo, verificarEscrituraPermitida };

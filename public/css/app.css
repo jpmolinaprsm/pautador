@@ -138,3 +138,50 @@ input[type=number]::-webkit-inner-spin-button { display: none; }
   background: var(--color-accent); color: var(--color-accent-ink, #fff);
   border-radius: 999px; font-size: 11px; font-family: var(--font-heading);
 }
+
+/* Pedido de Anuncios: cuadrícula de plataformas (multipick) */
+.plataforma-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.plataforma-card {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  min-height: 110px; padding: 16px 12px; position: relative;
+  background: var(--color-surface); border: 2px solid var(--color-divider); border-radius: var(--radius-md);
+  cursor: pointer; font: inherit; color: inherit; transition: border-color .1s, background .1s;
+}
+.plataforma-card i { font-size: 34px; color: var(--color-neutral-400); }
+.plataforma-card .nombre { font-family: var(--font-heading); font-size: 14px; }
+.plataforma-card .detalle { font-size: 11px; color: var(--color-neutral-500); text-align: center; }
+.plataforma-card:hover:not(:disabled) { border-color: var(--color-accent); }
+.plataforma-card.elegida { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+.plataforma-card.elegida i { color: var(--color-accent); }
+.plataforma-card.elegida::after {
+  content: "✓"; position: absolute; top: 8px; right: 10px; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--color-accent); color: var(--color-accent-ink, #fff); font-size: 12px; display: flex; align-items: center; justify-content: center;
+}
+.plataforma-card:disabled { cursor: not-allowed; opacity: .45; }
+
+/* Marca de ecosistema (Oficial / Informativo) en Pedido de Anuncios y en el nav */
+.eco-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.eco-chip.eco-oficial { background: var(--color-accent-800); color: var(--color-accent-100); }
+.eco-chip.eco-informativo { background: var(--color-accent-2-800); color: var(--color-accent-2-100); }
+.eco-chip.eco-todos { background: var(--color-neutral-800, #333); color: var(--color-neutral-100, #eee); }
+#tab-pedido2 > .expand-panel { border-left: 5px solid transparent; }
+#tab-pedido2 > .expand-panel.eco-oficial { border-left-color: var(--color-accent-600); }
+#tab-pedido2 > .expand-panel.eco-informativo { border-left-color: var(--color-accent-2-600); }
+
+/* Pantalla de Proyecto: cuadrícula de tarjetas por Cliente */
+.pantalla-onboarding-card--ancha { max-width: 980px; }
+.cliente-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; text-align: left; }
+.cliente-card {
+  background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+  padding: 14px 14px 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.cliente-card .cliente-nombre {
+  display: flex; align-items: center; gap: 6px; font-family: var(--font-heading); font-size: 12px;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--color-neutral-400);
+  padding-bottom: 8px; border-bottom: 1px solid var(--color-divider);
+}
+.cliente-card .pantalla-onboarding-opcion { padding: 11px 12px; }
+.plataforma-card .pantalla-onboarding-badge { position: absolute; top: 8px; left: 10px; }
+
+/* "¿Dónde lo encuentro?" al lado de los campos técnicos de administración (tooltip nativo en title) */
+.ayuda-donde { font-weight: 400; font-size: 11px; color: var(--color-accent); cursor: help; border-bottom: 1px dotted var(--color-accent); margin-left: 4px; }

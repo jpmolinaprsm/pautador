@@ -9,6 +9,7 @@
 const path = require('path');
 const XLSX = require('xlsx');
 const { readTable } = require('./dataSource');
+const codigosSheet = require('./codigosSheet');
 
 // Fallback para el preview en vivo del código (antes de que se termine de
 // elegir Tipo) — "0" (Automatización) ya no existe en equiv_tipo, así que
@@ -33,7 +34,7 @@ function leerAppSheetContenidos() {
 }
 
 // El prefijo de 6 caracteres es el que ya usa AppSheet para ese Proyecto.
-// Si el proyecto no existe ahí (como nuestro Test Sandbox), se deriva uno
+// Si el proyecto no existe ahí (uno cargado a mano que AppSheet no conoce), se deriva uno
 // que arranca con "TEST" para que quede clarísimo que no es real.
 function resolverPrefijoProyecto(nombreProyecto) {
   const { proyectos } = leerAppSheetContenidos();
@@ -43,26 +44,34 @@ function resolverPrefijoProyecto(nombreProyecto) {
   return ('TEST' + limpio).slice(0, 6).padEnd(6, 'X');
 }
 
+// Secuencia = máximo entre TRES fuentes: la hoja "CodigosContenido" viva
+// de AppSheet (CODIGOS_SHEET_ID, la que manda mientras no esté migrada a
+// Supabase — ver codigosSheet.js), el Excel local (copia vieja, por las
+// dudas) y cola_pautas (lo que PAUTADOR ya generó). Esto es solo lectura:
+// también lo llama el preview del código en el formulario, así que NO
+// reserva número — el código se anota en el caché de la hoja recién cuando
+// el pedido se inserta (ver crearPedido), y un lote de varios pedidos lo
+// ve igual porque cada uno relee cola_pautas.
 async function generarSiguienteCodigo(nombreProyecto, codigoEje, tipoCodigo) {
   const prefijo = resolverPrefijoProyecto(nombreProyecto);
   const buscado = `${prefijo}${tipoCodigo || TIPO_MVP}${codigoEje}`;
 
   let maxSeq = 0;
-  const { codigos } = leerAppSheetContenidos();
-  codigos.forEach((r) => {
-    if (r.Codigo && r.Codigo.startsWith(buscado)) {
-      const seq = parseInt(r.Codigo.slice(9), 10);
+  const considerar = (codigo) => {
+    if (codigo && String(codigo).startsWith(buscado)) {
+      const seq = parseInt(String(codigo).slice(9), 10);
       if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
     }
-  });
+  };
+
+  const enHoja = await codigosSheet.codigosExistentes();
+  if (enHoja) enHoja.forEach(considerar);
+
+  const { codigos } = leerAppSheetContenidos();
+  codigos.forEach((r) => considerar(r.Codigo));
 
   const locales = await readTable('cola_pautas');
-  locales.forEach((r) => {
-    if (r.codigo && r.codigo.startsWith(buscado)) {
-      const seq = parseInt(r.codigo.slice(9), 10);
-      if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
-    }
-  });
+  locales.forEach((r) => considerar(r.codigo));
 
   return `${buscado}${String(maxSeq + 1).padStart(5, '0')}`;
 }
