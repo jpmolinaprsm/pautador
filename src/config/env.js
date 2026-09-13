@@ -17,6 +17,19 @@ const env = {
     __dirname, '..', '..',
     process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || './credentials/service-account.json',
   ),
+  // Alternativa a credentialsPath para plataformas sin filesystem persistente
+  // (Railway): pegar el JSON entero de la Service Account en esta variable.
+  // Si está seteada, gana sobre credentialsPath (ver services/sheets.js).
+  credentialsJson: (() => {
+    const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON || '';
+    if (!raw.trim()) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      console.warn('[env] GOOGLE_SERVICE_ACCOUNT_KEY_JSON no es JSON válido:', err.message);
+      return null;
+    }
+  })(),
 
   // DATA_SOURCE=supabase — service_role (NUNCA la anon key: este server
   // necesita saltarse Row Level Security para leer/escribir todas las

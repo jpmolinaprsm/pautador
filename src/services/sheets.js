@@ -13,10 +13,11 @@ let sheetsClientPromise = null;
 function getClient() {
   if (!sheetsClientPromise) {
     sheetsClientPromise = (async () => {
-      const auth = new google.auth.GoogleAuth({
-        keyFile: path.resolve(env.credentialsPath),
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-      });
+      const auth = new google.auth.GoogleAuth(
+        env.credentialsJson
+          ? { credentials: env.credentialsJson, scopes: ['https://www.googleapis.com/auth/spreadsheets'] }
+          : { keyFile: path.resolve(env.credentialsPath), scopes: ['https://www.googleapis.com/auth/spreadsheets'] },
+      );
       const authClient = await auth.getClient();
       return google.sheets({ version: 'v4', auth: authClient });
     })();
