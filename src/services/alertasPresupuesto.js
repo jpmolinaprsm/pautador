@@ -158,9 +158,13 @@ async function verificarSmtp() {
   const t0 = Date.now();
   if (gmailConfigurado()) {
     try {
-      const { gmail } = clienteGmail();
-      const perfil = await gmail.users.getProfile({ userId: 'me' });
-      return { ok: true, via: 'gmail-api', casilla: perfil.data.emailAddress, destinatarios: env.alertasMailTo, ms: Date.now() - t0 };
+      // getProfile pide gmail.readonly; con gmail.send alcanza con renovar el
+      // access token y leer a qué cuenta/scopes pertenece.
+      const { cliente } = clienteGmail();
+      const { token } = await cliente.getAccessToken();
+      const { google } = require('googleapis');
+      const info = await google.oauth2('v2').tokeninfo({ access_token: token });
+      return { ok: true, via: 'gmail-api', casilla: info.data.email || '', scope: info.data.scope || '', destinatarios: env.alertasMailTo, ms: Date.now() - t0 };
     } catch (err) {
       return { ok: false, via: 'gmail-api', ms: Date.now() - t0, error: err.message };
     }
