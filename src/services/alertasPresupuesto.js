@@ -98,15 +98,35 @@ function smtpConfigurado() {
   return !!(env.smtpHost && env.smtpUser && env.smtpPass && env.alertasMailTo.length);
 }
 
-async function enviarMail(asunto, texto) {
-  if (!smtpConfigurado()) throw new Error('Falta configurar SMTP_HOST/SMTP_USER/SMTP_PASS y ALERTAS_MAIL_TO.');
-  const transporte = nodemailer.createTransport({
+function transporteSmtp() {
+  return nodemailer.createTransport({
     host: env.smtpHost,
     port: env.smtpPort,
     secure: env.smtpPort === 465,
     auth: { user: env.smtpUser, pass: env.smtpPass },
+    // Sin esto, un puerto bloqueado (PaaS que cortan SMTP saliente) deja la
+    // request colgada hasta el timeout del proxy en vez de fallar con motivo.
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
   });
-  await transporte.sendMail({ from: env.smtpFrom || env.smtpUser, to: env.alertasMailTo.join(', '), subject: asunto, text: texto });
+}
+
+async function enviarMail(asunto, texto) {
+  if (!smtpConfigurado()) throw new Error('Falta configurar SMTP_HOST/SMTP_USER/SMTP_PASS y ALERTAS_MAIL_TO.');
+  await transporteSmtp().sendMail({ from: env.smtpFrom || env.smtpUser, to: env.alertasMailTo.join(', '), subject: asunto, text: texto });
+}
+
+// Prueba la conexión SMTP desde este servidor sin mandar nada.
+async function verificarSmtp() {
+  if (!smtpConfigurado()) return { ok: false, error: 'Falta configurar SMTP_HOST/SMTP_USER/SMTP_PASS y ALERTAS_MAIL_TO.' };
+  const t0 = Date.now();
+  try {
+    await transporteSmtp().verify();
+    return { ok: true, host: env.smtpHost, port: env.smtpPort, ms: Date.now() - t0 };
+  } catch (err) {
+    return { ok: false, host: env.smtpHost, port: env.smtpPort, ms: Date.now() - t0, error: err.message, code: err.code };
+  }
 }
 
 async function enviarResumen() {
@@ -140,4 +160,4 @@ function programarEnvioDiario() {
   }, 10 * 60 * 1000);
 }
 
-module.exports = { estadoCuentas, armarMail, enviarResumen, programarEnvioDiario, smtpConfigurado };
+module.exports = { estadoCuentas, armarMail, enviarResumen, programarEnvioDiario, smtpConfigurado, verificarSmtp };

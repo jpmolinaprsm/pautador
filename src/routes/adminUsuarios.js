@@ -7,7 +7,7 @@ const { requireRol } = require('../middleware/usuarioActual');
 const { getUsuarios, serializarUsuario, crearUsuarioAdmin, actualizarUsuarioAdmin, ROLES } = require('../services/usuarios');
 const { getActivos, getActivoPorKey } = require('../services/configActivos');
 const { resumenProyectos, fijarEstado } = require('../services/proyectos');
-const { estadoCuentas, armarMail, enviarResumen, smtpConfigurado } = require('../services/alertasPresupuesto');
+const { estadoCuentas, armarMail, enviarResumen, smtpConfigurado, verificarSmtp } = require('../services/alertasPresupuesto');
 
 const router = express.Router();
 
@@ -110,6 +110,12 @@ router.get('/admin/diagnostico-meta', requireRol('administrador'), async (req, r
   } catch (err) {
     responderError(res, 'admin/diagnostico-meta', err);
   }
+});
+
+// GET /api/admin/diagnostico-smtp — prueba la conexión SMTP desde este
+// servidor (sin mandar mail).
+router.get('/admin/diagnostico-smtp', requireRol('administrador'), async (req, res) => {
+  res.json(await verificarSmtp());
 });
 
 router.get('/admin/presupuestos', requireRol('administrador'), async (req, res) => {
