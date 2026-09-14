@@ -5,7 +5,7 @@
 const express = require('express');
 const { requireRol } = require('../middleware/usuarioActual');
 const { getUsuarios, serializarUsuario, crearUsuarioAdmin, actualizarUsuarioAdmin, ROLES } = require('../services/usuarios');
-const { getActivos } = require('../services/configActivos');
+const { getActivos, getActivoPorKey } = require('../services/configActivos');
 const { resumenProyectos, fijarEstado } = require('../services/proyectos');
 const { estadoCuentas, armarMail, enviarResumen, smtpConfigurado } = require('../services/alertasPresupuesto');
 
