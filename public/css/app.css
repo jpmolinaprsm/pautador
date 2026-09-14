@@ -73,6 +73,7 @@ input[type=number]::-webkit-inner-spin-button { display: none; }
   cursor: pointer; background: var(--color-surface); transition: border-color .1s;
 }
 .pedido-card:hover { border-color: var(--color-accent); }
+.pedido-card:disabled:hover { border-color: var(--color-divider); }
 
 .dropdown-multi { position: relative; }
 .dropdown-multi-btn {

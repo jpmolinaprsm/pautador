@@ -112,6 +112,55 @@ router.get('/admin/diagnostico-meta', requireRol('administrador'), async (req, r
   }
 });
 
+// GET /api/admin/creatividades?vencidas=1 — biblioteca de creatividades
+// (bucket privado + tabla `creatividades`, ver services/storage.js) con los
+// datos del pedido asociado (cola_pautas por correlation_id) y los ids de
+// campaña/conjunto en Meta (matriz_distribucion). Solo superadmin (usuario,
+// 2026-09-14: "una pestaña solo visible para mí"). La vista previa es un
+// link firmado de 1 hora.
+router.get('/admin/creatividades', requireRol('administrador'), async (req, res) => {
+  if (!req.usuario.es_superadmin) return res.status(403).json({ error: 'Solo el superadmin ve la biblioteca de creatividades.' });
+  const storage = require('../services/storage');
+  const { readTable } = require('../services/dataSource');
+  try {
+    const conVencidas = String(req.query.vencidas || '') === '1';
+    const [creas, pautas, matriz, activos] = await Promise.all([
+      readTable('creatividades'), readTable('cola_pautas'), readTable('matriz_distribucion'), getActivos(),
+    ]);
+    const nombreActivo = (key) => { const a = activos.find((x) => x.activo_key === key); return a ? (a.activo || key) : key; };
+    const filas = creas
+      .filter((c) => conVencidas || !c.borrado_en)
+      .sort((a, b) => String(b.creado_en || '').localeCompare(String(a.creado_en || '')));
+    const salida = [];
+    for (const c of filas) {
+      // Pedidos que usan esta creatividad: por etiqueta (correlation_id) o por
+      // material "creatividad:<id>" (carrusel: varios separados por "|").
+      const usos = pautas.filter((p) => p.correlation_id && (p.correlation_id === c.correlation_id || String(p.material || '').split('|').map((s) => s.trim()).includes(`creatividad:${c.id}`)));
+      const pedidos = usos.map((p) => {
+        const celdas = matriz.filter((m) => m.correlation_id === p.correlation_id);
+        return {
+          correlation_id: p.correlation_id, codigo: p.codigo, proyecto: p.proyecto, activo: nombreActivo(p.activo), activo_key: p.activo,
+          campana: p.campana, eje: p.eje, tipo: String(p.codigo || '').charAt(6), objetivo: p.objetivo, audiencia: p.audiencia,
+          estado: p.estado, fecha: p.fecha, fecha_inicio: p.fecha_inicio, fecha_fin: p.fecha_fin, presupuesto: p.presupuesto, modo: p.modo, origen: p.origen || '',
+          creador: p.creador || p.creado_por || '', plataforma: p.plataforma || 'Meta',
+          meta: { campanas: [...new Set(celdas.map((m) => m.campaign_id).filter(Boolean))], conjuntos: celdas.filter((m) => m.adset_id).length, publicadas: celdas.filter((m) => m.estado_celda === 'publicada').length },
+        };
+      });
+      let previewUrl = null;
+      if (!c.borrado_en) { try { previewUrl = await storage.urlFirmada(c.storage_path, 3600); } catch (e) { previewUrl = null; } }
+      salida.push({
+        id: c.id, nombre: c.nombre_original, content_type: c.content_type, bytes: Number(c.bytes) || 0, width: c.width, height: c.height,
+        origen: c.origen, link_original: c.link_original, subido_por: c.subido_por, creado_en: c.creado_en, expira_en: c.expira_en, borrado_en: c.borrado_en,
+        etiquetas: { proyecto: c.proyecto, activo: c.activo_key ? nombreActivo(c.activo_key) : '', codigo: c.codigo, campana: c.campana, eje: c.eje },
+        previewUrl, pedidos,
+      });
+    }
+    res.json({ storageActivo: storage.habilitado(), total: salida.length, creatividades: salida });
+  } catch (err) {
+    responderError(res, 'admin/creatividades', err);
+  }
+});
+
 // GET /api/admin/diagnostico-smtp — prueba la conexión SMTP desde este
 // servidor (sin mandar mail).
 router.get('/admin/diagnostico-smtp', requireRol('administrador'), async (req, res) => {

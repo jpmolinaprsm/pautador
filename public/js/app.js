@@ -158,6 +158,9 @@ const state = {
   pd2Proyecto: null, pd2ActivoKey: null, pd2TipoCodigo: 'D', pd2EjeCodigo: null,
   pd2CampanasSugeridas: [],
   pd2Objetivo: [], pd2AudienciaCodigo: '', pd2Refuerzo: [],
+  // Pestaña Creatividades (solo superadmin): datos del server y filtros.
+  creaDatos: null, creaCargando: false, creaError: '',
+  creaFiltro: { proyecto: '', campana: '', texto: '', vencidas: false },
   // Cruces Objetivo|Audiencia que el PM desactivó antes de pedir, y cómo se
   // reparte el % de inversión entre los que quedan — ver renderCrucesV2.
   // Viven fuera de pd2BulkItems porque Objetivo/Audiencia son compartidos
@@ -273,7 +276,10 @@ const TABS_POR_ROL = {
 
 function tabsPermitidas() {
   const u = usuarioActual();
-  return u ? (TABS_POR_ROL[u.rol] || []) : [];
+  if (!u) return [];
+  const tabs = TABS_POR_ROL[u.rol] || [];
+  // Biblioteca de creatividades: solo superadmin (usuario, 2026-09-14).
+  return u.es_superadmin ? [...tabs, 'creatividades'] : tabs;
 }
 
 // "Validación de Anuncios" es de edición para implementador/administrador,
@@ -1532,14 +1538,11 @@ function renderEditarModal() {
   const redesHtml = [['facebook', 'Facebook'], ['instagram', 'Instagram']].map(([v, l]) => '<label style="display:inline-flex;align-items:center;gap:4px;margin-right:14px;font-size:13px"><input type="checkbox" class="editarpauta-redes-chk" value="' + v + '" ' + ((c.redes || []).includes(v) ? 'checked' : '') + '> ' + l + '</label>').join('');
   const placementsHtml = [['feed', 'Feed'], ['stories', 'Stories'], ['reels', 'Reels']].map(([v, l]) => '<label style="display:inline-flex;align-items:center;gap:4px;margin-right:14px;font-size:13px"><input type="checkbox" class="editarpauta-placements-chk" value="' + v + '" ' + ((c.placements || []).includes(v) ? 'checked' : '') + '> ' + l + '</label>').join('');
   const formatoOpts = '<option value="">— elegir —</option>' + (state.pdFormatos || []).map((f) => '<option value="' + esc(f.appsheet_valor) + '" ' + (f.appsheet_valor === c.formato ? 'selected' : '') + '>' + esc(f.appsheet_valor) + '</option>').join('');
-  // Sin "Otra" (audiencia manual) — recorte a MVP, ver src/config/mvp.js.
-  // "Otra" según el modo de la SESIÓN actual (no el de la pauta que se
-  // edita — el modo queda fijo por pauta, esto es una simplificación:
-  // alcanza para hoy, no hay forma de estar editando una pauta de un modo
-  // distinto al que se eligió al entrar).
+  // "Otra" (audiencia manual) se ofrece en los dos modos — en Automatizado
+  // ese cruce se carga a mano (ver renderAudienciaSelect).
   const audOpts = '<option value="">— elegir —</option>'
     + (state.pdAudiencias || []).map((a) => '<option value="' + esc(a.codigo) + '" ' + (a.codigo === c.audienciaCodigo ? 'selected' : '') + '>' + esc(a.nombre) + '</option>').join('')
-    + (state.modoActivo === 'automatizado' ? '' : '<option value="Otra" ' + (c.audienciaCodigo === 'Otra' ? 'selected' : '') + '>Otra</option>');
+    + '<option value="Otra" ' + (c.audienciaCodigo === 'Otra' ? 'selected' : '') + '>Otra</option>';
   const esPublico = c.visibilidad === 'PUBLICO';
   const preview = c.imagenPreview
     ? '<img src="' + esc(c.imagenPreview) + '" data-action="abrir-lightbox" data-url="' + esc(c.imagenPreview) + '" style="width:120px;height:120px;object-fit:cover;border-radius:var(--radius-md);cursor:zoom-in;flex:none" title="Ver más grande">'
@@ -1620,6 +1623,13 @@ function renderNavUsuario() {
   const sel = document.getElementById('usuario-actual');
   sel.innerHTML = state.usuarios.map((u) => `<option value="${esc(u.id)}">${esc(u.nombre)}</option>`).join('');
   if (state.usuarioActualId) sel.value = state.usuarioActualId;
+  // "Actuar como" es una herramienta de prueba: solo el superadmin cambia
+  // de usuario (usuario, 2026-09-14). El resto ve su nombre y nada más.
+  const u = usuarioActual();
+  const puedeCambiar = !!(u && u.es_superadmin);
+  sel.hidden = !puedeCambiar;
+  const nombre = document.getElementById('usuario-actual-nombre');
+  if (nombre) { nombre.hidden = puedeCambiar || !u; nombre.textContent = u ? u.nombre : ''; }
 
   const permitidas = tabsPermitidas();
   document.querySelectorAll('.tab-btn[data-tab]').forEach((b) => {
@@ -1912,21 +1922,40 @@ function renderDropdownMulti(id, claseChk, opciones, placeholder, seleccionados)
     </div>`;
 }
 
-// Sin "Otra" (audiencia manual) — recorte a MVP, ver src/config/mvp.js.
-// "Otra" (audiencia manual) solo se ofrece en modo "normal" — en
-// "automatizado" está bloqueada (ver validación en pedidos.js).
-// Pedido Manual: las 20 más usadas del Proyecto × Canal (ya vienen
-// ordenadas del server) y "Otra" para escribir cuál es.
+// "Otra" (audiencia manual) se ofrece en los dos modos (usuario,
+// 2026-09-14): en Automatizado la pieza sale igual pero ese cruce se carga
+// a mano y queda en Pendientes — ver renderAvisoOtraV2 y pedidos.js.
+// Pedido Manual: las más usadas del Proyecto × Canal (ya vienen ordenadas
+// del server) y "Otra" para escribir cuál es.
 function renderAudienciaSelect(id, audiencias, seleccionado) {
   const opts = audiencias.map((a) => `<option value="${esc(a.codigo)}" ${a.codigo === seleccionado ? 'selected' : ''}>${esc(a.nombre)}</option>`).join('');
-  const otra = state.modoActivo === 'automatizado' ? '' : `<option value="Otra" ${seleccionado === 'Otra' ? 'selected' : ''}>Otra</option>`;
+  const otra = `<option value="Otra" ${seleccionado === 'Otra' ? 'selected' : ''}>Otra</option>`;
   return `<select class="input" id="${id}"><option value="">— elegir —</option>${opts}${otra}</select>`;
 }
 
 function renderRefuerzoDropdown(prefix, audiencias, seleccionados) {
   const opciones = audiencias.map((a) => [a.codigo, a.nombre]);
-  if (state.modoActivo !== 'automatizado') opciones.push(['Otra', 'Otra']);
+  opciones.push(['Otra', 'Otra']);
   return renderDropdownMulti(`${prefix}-refuerzo-dd`, `${prefix}-refuerzo-chk`, opciones, '— opcional, uno o más —', seleccionados);
+}
+
+// Aviso del Módulo 2 en Automatizado cuando hay "Otra" entre las audiencias
+// (usuario, 2026-09-14): la pieza se pide igual, pero ese cruce no lo
+// publica PAUTADOR — lo cargan a mano los implementadores desde Pendientes.
+function renderAvisoOtraV2() {
+  const el = document.getElementById('pd2-aviso-otra');
+  if (!el) return;
+  const auds = audienciasDelPd2();
+  const hayOtra = state.modoActivo === 'automatizado' && auds.some((a) => a.manual);
+  el.hidden = !hayOtra;
+  if (!hayOtra) return;
+  const soloOtra = auds.every((a) => a.manual);
+  el.innerHTML = `<div style="padding:10px 12px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);font-size:12px;color:var(--color-neutral-300)">
+      <i class="ph ph-hand"></i> <strong>La audiencia "Otra" no está automatizada.</strong>
+      ${soloOtra
+    ? 'El pedido se carga igual, pero esta pieza no sale sola: la cargan a mano los implementadores en Meta y queda en Pendientes hasta que la marquen hecha.'
+    : 'Los cruces con las otras audiencias salen solos; el cruce con "Otra" lo cargan a mano los implementadores y queda en Pendientes hasta que lo marquen hecho.'}
+    </div>`;
 }
 
 // Red y Placement se muestran como checkboxes sueltos, no como el
@@ -3420,6 +3449,7 @@ async function actualizarPresupuestoPreviewPd2() {
 }
 
 function renderCrucesV2() {
+  renderAvisoOtraV2();
   const wrap = document.getElementById('pd2-cruces-wrap');
   if (!wrap) return;
   const filas = repartoResueltoPd2();
@@ -3712,6 +3742,9 @@ function invalidarPreviewsPiezasV2() {
 // redirige directo al modo CSV de "Pedido de Pauta" clásico. "Pedido de
 // Anuncios" arranca siempre con 1 pieza (el Módulo 4 deja subirla hasta 10).
 function cambiarModoCargaV2(modo) {
+  // Cargar CSV desactivado por ahora (usuario, 2026-09-14): los botones
+  // están disabled en el HTML; esto cubre cualquier otro disparador.
+  if (modo === 'csv') return;
   state.pd2ModoCarga = modo;
   // "Ni bien toca Pedido de Anuncios": la cuadrícula de plataformas se
   // pregunta siempre al entrar (queda lo elegido la última vez como default).
@@ -4873,6 +4906,17 @@ function renderPreviewsBulkV2() {
 // Al confirmar, el pedido sale de su pantalla y acá se dice claro si salió
 // o no (usuario, 2026-09-14). Si algo falló, el formulario queda cargado y
 // "Corregir el pedido" vuelve a él.
+// Texto de estado de una pieza creada (resultado parcial y final). Sin
+// "(en pausa)": desde el lanzamiento el estado inicial lo define
+// AUTOMATIZADO_ESTADO_INICIAL en el server. Los cruces con audiencia "Otra"
+// en Automatizado quedan manual_pendiente (Pendientes de implementadores).
+function estadoResultadoPiezaV2(r) {
+  if (r.publicado && r.manuales) return 'publicada en Meta; el cruce con la audiencia "Otra" queda para cargar a mano (Pendientes)';
+  if (r.publicado) return 'publicada en Meta';
+  if (r.motivo && state.modoActivo === 'automatizado') return 'creada — la audiencia "Otra" no está automatizada: la cargan a mano los implementadores (Pendientes)';
+  return 'creada — queda para cargar a mano' + (r.plataforma && r.plataforma !== 'Meta' ? ' en ' + r.plataforma : '') + ' y marcar hecha desde Historial';
+}
+
 function renderResultadoFinalV2() {
   const el = document.getElementById('pd2-resultado-final');
   const resultados = state.pd2BulkResultados;
@@ -4894,9 +4938,7 @@ function renderResultadoFinalV2() {
   }
   const filas = resultados.map((r, i) => {
     if (!r.ok) return `<div class="error" style="margin:4px 0">${unaSola ? '' : `Pieza ${i + 1}: `}${esc(r.error)}</div>`;
-    const estado = r.publicado
-      ? 'publicada en Meta (en pausa)'
-      : 'creada — queda para cargar a mano' + (r.plataforma && r.plataforma !== 'Meta' ? ' en ' + r.plataforma : '') + ' y marcar hecha desde Historial';
+    const estado = estadoResultadoPiezaV2(r);
     const prefijo = unaSola ? 'Código' : `Pieza ${i + 1}: código`;
     return `<div style="margin:4px 0">${prefijo} <code>${esc(r.codigo)}</code> — ${estado}.</div>`;
   }).join('');
@@ -4946,9 +4988,7 @@ function renderResultadoBulkV2() {
   const unaSola = resultados.length === 1;
   const filas = resultados.map((r, i) => {
     if (!r.ok) return `<div class="error">${unaSola ? '' : `Pieza ${i + 1}: `}${esc(r.error)}</div>`;
-    const estado = r.publicado
-      ? 'publicada en Meta (en pausa)'
-      : 'creada — queda para cargar a mano' + (r.plataforma && r.plataforma !== 'Meta' ? ' en ' + r.plataforma : '') + ' y marcar hecha desde Historial';
+    const estado = estadoResultadoPiezaV2(r);
     const prefijo = unaSola ? 'Código' : `Pieza ${i + 1}: código`;
     return `<div style="color:var(--color-accent-2-600)">${prefijo} <code>${esc(r.codigo)}</code> — ${estado}.</div>`;
   }).join('');
@@ -5054,7 +5094,12 @@ async function enviarBulkV2() {
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.detalle || data.error);
-      state.pd2BulkResultados.push({ ok: true, codigo: data.codigo, publicado: !!data.publicado });
+      // Cruces que quedaron para cargar a mano (audiencia "Otra" en
+      // Automatizado): el server los deja manual_pendiente; si TODA la
+      // pieza es manual no publica nada y lo explica en `motivo`.
+      const celdas = (data.resultado && data.resultado.celdas) || [];
+      const manuales = celdas.filter((c) => c.estado_celda === 'manual_pendiente').length;
+      state.pd2BulkResultados.push({ ok: true, codigo: data.codigo, publicado: !!data.publicado, manuales, motivo: data.motivo || '' });
     } catch (err) {
       state.pd2BulkResultados.push({ ok: false, error: err.message });
     }
@@ -5113,11 +5158,118 @@ function cambiarTab(tab) {
   document.getElementById('tab-pendientes').hidden = tab !== 'pendientes';
   document.getElementById('tab-admin').hidden = tab !== 'admin';
   document.getElementById('tab-usuarios').hidden = tab !== 'usuarios';
+  document.getElementById('tab-creatividades').hidden = tab !== 'creatividades';
   if (tab === 'pedido2' || tab === 'crear') { if (!state.pdProyectos.length) cargarDatosPedido().then(renderTabPedido2); else renderTabPedido2(); }
   if (tab === 'pendientes') cargarItems();
   if (tab === 'admin') { if (!state.admActivosCargados) cargarDatosAdmin(); else renderTabAdmin(); }
   if (tab === 'usuarios') cargarPanelUsuarios();
+  if (tab === 'creatividades') { if (!state.creaDatos) cargarCreatividades(); else renderTabCreatividades(); }
   render();
+}
+
+// ---------- Pestaña Creatividades (solo superadmin) ----------
+// Biblioteca del bucket privado con los datos del pedido asociado a cada
+// archivo (usuario, 2026-09-14). Todo viene armado del server
+// (GET /api/admin/creatividades); acá solo se filtra y se dibuja.
+
+async function cargarCreatividades() {
+  state.creaCargando = true; state.creaError = '';
+  renderTabCreatividades();
+  try {
+    const r = await apiFetch('/api/admin/creatividades' + (state.creaFiltro.vencidas ? '?vencidas=1' : ''));
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detalle || data.error || 'No se pudo cargar la biblioteca.');
+    state.creaDatos = data;
+  } catch (err) {
+    state.creaError = err.message;
+  }
+  state.creaCargando = false;
+  renderTabCreatividades();
+}
+
+function fmtBytesCrea(n) {
+  n = Number(n) || 0;
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n >= 1024) return Math.round(n / 1024) + ' KB';
+  return n + ' B';
+}
+function fmtFechaCrea(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso).slice(0, 10) : d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function renderTabCreatividades() {
+  const lista = document.getElementById('crea-lista');
+  const estado = document.getElementById('crea-estado');
+  if (!lista) return;
+  const f = state.creaFiltro;
+  const datos = state.creaDatos;
+  if (state.creaCargando) { estado.textContent = 'Cargando…'; lista.innerHTML = ''; return; }
+  if (state.creaError) { estado.innerHTML = '<span class="error">' + esc(state.creaError) + '</span>'; lista.innerHTML = ''; return; }
+  if (!datos) { estado.textContent = ''; lista.innerHTML = ''; return; }
+  const todas = datos.creatividades || [];
+  // Filtros: proyecto y campaña salen de las etiquetas y de los pedidos.
+  const proyectoDe = (c) => [c.etiquetas.proyecto, ...c.pedidos.map((p) => p.proyecto)].filter(Boolean);
+  const campanaDe = (c) => [c.etiquetas.campana, ...c.pedidos.map((p) => p.campana)].filter(Boolean);
+  const proyectos = [...new Set(todas.flatMap(proyectoDe))].sort((a, b) => a.localeCompare(b, 'es'));
+  const campanas = [...new Set(todas.filter((c) => !f.proyecto || proyectoDe(c).includes(f.proyecto)).flatMap(campanaDe))].sort((a, b) => a.localeCompare(b, 'es'));
+  const selP = document.getElementById('crea-proyecto');
+  const selC = document.getElementById('crea-campana');
+  selP.innerHTML = '<option value="">Todos</option>' + proyectos.map((p) => `<option value="${esc(p)}" ${p === f.proyecto ? 'selected' : ''}>${esc(p)}</option>`).join('');
+  selC.innerHTML = '<option value="">Todas</option>' + campanas.map((p) => `<option value="${esc(p)}" ${p === f.campana ? 'selected' : ''}>${esc(p)}</option>`).join('');
+  document.getElementById('crea-vencidas').checked = !!f.vencidas;
+  const texto = (f.texto || '').trim().toLowerCase();
+  const visibles = todas.filter((c) => {
+    if (f.proyecto && !proyectoDe(c).includes(f.proyecto)) return false;
+    if (f.campana && !campanaDe(c).includes(f.campana)) return false;
+    if (texto) {
+      const bolsa = [c.nombre, c.id, c.etiquetas.codigo, c.etiquetas.activo, c.etiquetas.campana, c.subido_por, ...c.pedidos.flatMap((p) => [p.codigo, p.activo, p.campana, p.creador])].filter(Boolean).join(' ').toLowerCase();
+      if (!bolsa.includes(texto)) return false;
+    }
+    return true;
+  });
+  const sinUsar = visibles.filter((c) => !c.pedidos.length).length;
+  estado.innerHTML = `${visibles.length} de ${todas.length} creatividades` + (sinUsar ? ` · ${sinUsar} sin pedido asociado` : '')
+    + (datos.storageActivo ? '' : ' · <span style="color:var(--color-warning, #d08a1e)"><i class="ph ph-warning"></i> El servidor no está guardando en el bucket (CREATIVIDADES_STORAGE apagado): lo nuevo va al disco y se pierde en el próximo deploy.</span>');
+  if (!visibles.length) { lista.innerHTML = '<p style="color:var(--color-neutral-500);font-size:13px">No hay creatividades con ese filtro.</p>'; return; }
+  lista.innerHTML = visibles.map(renderTarjetaCreatividad).join('');
+}
+
+function renderTarjetaCreatividad(c) {
+  const esVideo = /^video\//.test(c.content_type || '');
+  let media;
+  if (c.borrado_en) media = '<div style="height:170px;display:flex;align-items:center;justify-content:center;color:var(--color-neutral-500);font-size:12px;background:var(--color-divider)">Vencida y borrada el ' + esc(fmtFechaCrea(c.borrado_en)) + '</div>';
+  else if (!c.previewUrl) media = '<div style="height:170px;display:flex;align-items:center;justify-content:center;color:var(--color-neutral-500);font-size:12px;background:var(--color-divider)">Sin vista previa</div>';
+  else if (esVideo) media = '<video src="' + esc(c.previewUrl) + '" controls preload="metadata" style="width:100%;height:170px;object-fit:contain;background:#000;display:block"></video>';
+  else media = '<img src="' + esc(c.previewUrl) + '" data-action="abrir-lightbox" data-url="' + esc(c.previewUrl) + '" style="width:100%;height:170px;object-fit:cover;display:block;cursor:zoom-in" title="Ver más grande">';
+  const medidas = c.width && c.height ? ` · ${c.width}×${c.height}` : '';
+  const vence = c.expira_en ? `vence ${fmtFechaCrea(c.expira_en)}` : '';
+  const cabecera = `<div style="padding:10px 12px 6px">
+      <div style="font-family:var(--font-heading);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(c.nombre || c.id)}">${esc(c.nombre || c.id)}</div>
+      <div style="font-size:11px;color:var(--color-neutral-500);margin-top:2px">${esc((c.content_type || '').split('/')[1] || c.content_type || '')} · ${fmtBytesCrea(c.bytes)}${medidas} · subida ${esc(fmtFechaCrea(c.creado_en))}${c.subido_por ? ' por ' + esc(c.subido_por) : ''}${vence ? ' · ' + vence : ''}</div>
+    </div>`;
+  let pedidos;
+  if (!c.pedidos.length) {
+    pedidos = '<div style="padding:8px 12px 12px;font-size:12px;color:var(--color-neutral-500)"><span class="tag tag-outline" style="font-size:10px">sin pedido asociado</span>' + (c.etiquetas.codigo ? ' ' + esc(c.etiquetas.codigo) : '') + '</div>';
+  } else {
+    pedidos = c.pedidos.map((p) => {
+      const estadoTag = p.estado === 'confirmada' ? 'tag-accent' : '';
+      const metaTxt = p.meta.conjuntos ? `${p.meta.publicadas}/${p.meta.conjuntos} conjuntos en Meta` : 'sin conjuntos en Meta';
+      const objetivos = String(p.objetivo || '').split(',').map((s) => s.trim()).filter(Boolean).join(' + ');
+      return `<div style="padding:8px 12px 10px;border-top:1px solid var(--color-divider);font-size:12px">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+            <code style="font-size:12px">${esc(p.codigo || p.correlation_id)}</code>
+            <span class="tag ${estadoTag}" style="font-size:10px">${esc(p.estado || '')}</span>
+          </div>
+          <div style="margin-top:4px"><strong>${esc(p.campana || '')}</strong></div>
+          <div style="color:var(--color-neutral-400)">${esc(p.proyecto || '')} · ${esc(p.activo || '')}${p.eje ? ' · ' + esc(p.eje) : ''}</div>
+          <div style="color:var(--color-neutral-400)">${esc(objetivos)}${p.audiencia ? ' · ' + esc(p.audiencia) : ''}${p.presupuesto ? ' · ' + fmtMoney(p.presupuesto) : ''}</div>
+          <div style="color:var(--color-neutral-500);margin-top:2px">${esc(fmtFechaCrea(p.fecha))}${p.creador ? ' · ' + esc(p.creador) : ''} · ${metaTxt}${p.origen === 'ingesta' ? ' · ingesta' : ''}</div>
+        </div>`;
+    }).join('');
+  }
+  return `<div class="expand-panel" style="padding:0;overflow:hidden${c.borrado_en ? ';opacity:.6' : ''}">${media}${cabecera}${pedidos}</div>`;
 }
 
 // ---------- Onboarding: Login → Proyecto → Modo → (Normal) Ecosistema ----------
@@ -5444,6 +5596,8 @@ function renderPantallaProyecto() {
   const selUsuario = document.getElementById('pantalla-proyecto-usuario-select');
   selUsuario.innerHTML = state.usuarios.map((usr) => `<option value="${esc(usr.id)}">${esc(usr.nombre)}</option>`).join('');
   if (state.usuarioActualId) selUsuario.value = state.usuarioActualId;
+  // Solo el superadmin puede "entrar como" otro (usuario, 2026-09-14).
+  document.getElementById('pantalla-proyecto-cambiar-usuario').hidden = !(u && u.es_superadmin);
 
   // Agrupado por Cliente (config_activos.cliente): el cliente como título y
   // debajo sus proyectos — un cliente con un solo proyecto se ve como
@@ -5490,8 +5644,39 @@ function renderPantallaProyecto() {
   const opciones = tarjetas ? '<div class="cliente-grid">' + tarjetas + '</div>' : '';
   // Sin "Ver todos los proyectos" (sacado a pedido del usuario 2026-09-11):
   // siempre se trabaja sobre un proyecto concreto, también el admin.
-  document.getElementById('pantalla-proyecto-lista').innerHTML = opciones
-    || '<p style="color:var(--color-neutral-500);font-size:13px">Todavía no te asignaron ningún Proyecto — mientras tanto, elegí más abajo con qué usuario entrar.</p>';
+  // Sin proyectos asignados (usuario nuevo del dominio): botón "Pedir
+  // asignación de Proyectos" → mail a los administradores (usuario,
+  // 2026-09-14). Un admin sin proyectos es raro (ve todos): texto simple.
+  document.getElementById('pantalla-proyecto-lista').innerHTML = opciones || renderSinProyectos(u);
+}
+
+function renderSinProyectos(u) {
+  const esAdmin = !!(u && u.rol === 'administrador');
+  const r = state.pedidoAsignacion || {};
+  const cuerpo = esAdmin
+    ? 'Todavía no hay proyectos para mostrar.'
+    : 'Todavía no te asignaron ningún Proyecto. Pedile a un administrador que te lo asigne desde acá:';
+  let accion = '';
+  if (!esAdmin) {
+    if (r.ok) accion = `<p style="margin:10px 0 0;font-size:13px;color:var(--color-success, #1f8a4c)"><i class="ph ph-check-circle"></i> ${esc(r.mensaje || 'Listo: avisamos a los administradores.')}</p>`;
+    else accion = `<div style="margin-top:12px"><button type="button" class="btn btn-primary" data-action="pedir-asignacion" ${r.enviando ? 'disabled' : ''}><i class="ph ph-paper-plane-tilt"></i> ${r.enviando ? 'Avisando…' : 'Pedir asignación de Proyectos'}</button></div>`
+      + (r.error ? `<p class="error" style="margin:8px 0 0">${esc(r.error)}</p>` : '');
+  }
+  return `<p style="color:var(--color-neutral-500);font-size:13px;margin:0">${cuerpo}</p>${accion}`;
+}
+
+async function pedirAsignacionProyectos() {
+  state.pedidoAsignacion = { enviando: true };
+  renderPantallaProyecto();
+  try {
+    const r = await apiFetch('/api/usuarios/pedir-asignacion', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detalle || data.error || 'No se pudo mandar el aviso.');
+    state.pedidoAsignacion = { ok: true, mensaje: data.mensaje };
+  } catch (err) {
+    state.pedidoAsignacion = { error: err.message };
+  }
+  renderPantallaProyecto();
 }
 
 function renderPantallaModo() {
@@ -5675,6 +5860,8 @@ document.addEventListener('click', (e) => {
   const id = el.dataset.id;
 
   if (action === 'stop-prop') { e.stopPropagation(); return; }
+  if (action === 'pedir-asignacion') { pedirAsignacionProyectos(); return; }
+  if (action === 'crea-recargar') { cargarCreatividades(); return; }
   if (action === 'elegir-usuario') { elegirUsuario(id); return; }
   if (action === 'elegir-proyecto') { elegirProyecto(id); return; }
   if (action === 'elegir-modo') { elegirModo(id); return; }
@@ -5896,6 +6083,10 @@ document.addEventListener('change', (e) => {
   // Panel Usuarios: rol/habilitado/accesos del usuario seleccionado — se
   // acumulan en state.usuEdit y recién van al server con "Guardar".
   if (e.target.id === 'hist-activo') { state.historial.activo = e.target.value; render(); return; }
+  // Pestaña Creatividades: filtros.
+  if (e.target.id === 'crea-proyecto') { state.creaFiltro.proyecto = e.target.value; state.creaFiltro.campana = ''; renderTabCreatividades(); return; }
+  if (e.target.id === 'crea-campana') { state.creaFiltro.campana = e.target.value; renderTabCreatividades(); return; }
+  if (e.target.id === 'crea-vencidas') { state.creaFiltro.vencidas = e.target.checked; cargarCreatividades(); return; }
   if (e.target.id === 'usu-edit-rol') { if (state.usuEdit) { state.usuEdit.rol = e.target.value; renderTabUsuarios(); } return; }
   if (e.target.id === 'usu-edit-habilitado') { if (state.usuEdit) state.usuEdit.habilitado = e.target.checked; return; }
   if (e.target.id === 'usu-edit-nombre') { if (state.usuEdit) state.usuEdit.nombre = e.target.value; return; }
@@ -6214,6 +6405,7 @@ document.getElementById('pantalla-proyecto-usuario-select').addEventListener('ch
 document.addEventListener('input', (e) => {
   if (e.target.id === 'hist-buscar') { state.historial.busqueda = e.target.value; renderHistorialSheet(state.items.map((it) => buildVM(it))); return; }
   if (e.target.id === 'pd2-campana') { renderCampanasDatalistPd2(); return; }
+  if (e.target.id === 'crea-texto') { state.creaFiltro.texto = e.target.value; renderTabCreatividades(); return; }
   // Si se toca el material, lo verificado deja de valer: hay que volver a
   // verificar antes de poder crear.
   if (e.target.id && /^pd2bulk\d+-material$/.test(e.target.id) && state.pd2BulkPreviews) {

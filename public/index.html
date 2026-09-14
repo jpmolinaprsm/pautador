@@ -38,8 +38,8 @@
       <h4 style="margin:0 0 4px">¿En qué Proyecto vas a trabajar?</h4>
       <p style="margin:0 0 20px;font-size:13px;color:var(--color-neutral-500)">Vas a ver y pautar solo lo de este proyecto — se puede cambiar después con "Cambiar de Proyecto".</p>
       <div id="pantalla-proyecto-lista" class="pantalla-onboarding-lista"></div>
-      <div style="margin-top:22px;padding-top:16px;border-top:1px dashed var(--color-divider)">
-        <label style="display:block;font-size:11px;color:var(--color-neutral-400);margin-bottom:6px">Mientras se terminan de asignar los accesos, entrá como</label>
+      <div id="pantalla-proyecto-cambiar-usuario" hidden style="margin-top:22px;padding-top:16px;border-top:1px dashed var(--color-divider)">
+        <label style="display:block;font-size:11px;color:var(--color-neutral-400);margin-bottom:6px">Entrar como (solo superadmin)</label>
         <select class="input" id="pantalla-proyecto-usuario-select" style="width:100%"></select>
       </div>
     </div>
@@ -77,13 +77,13 @@
       <img src="/img/prosumia-logo.svg" alt="Prosumia" style="height:22px">
       <span style="width:1px;height:18px;background:var(--color-divider)"></span>
       Pautador
-      <span style="font-size:12px;font-weight:400;color:var(--color-neutral-500);white-space:nowrap">Meta Ads · Pauta política</span>
     </button>
     <button type="button" class="tag" id="nav-proyecto-actual" data-action="cambiar-de-proyecto" title="Cambiar de Proyecto" style="cursor:pointer"></button>
     <button type="button" class="tag" id="nav-modo-actual" data-action="toggle-modo" title="Cambiar de modo" style="cursor:pointer"></button>
     <button type="button" class="tag" id="nav-ecosistema-actual" data-action="toggle-ecosistema" title="Cambiar de canal (Oficial / Informativo)" style="cursor:pointer" hidden></button>
     <button type="button" class="tag tag-accent" id="pendientes-count" data-action="ir-a-validacion" style="cursor:pointer;border:none;font-family:inherit">0 pendientes</button>
-    <select class="input filtro" id="usuario-actual" title="Actuando como"></select>
+    <select class="input filtro" id="usuario-actual" title="Actuando como (solo superadmin)"></select>
+    <span id="usuario-actual-nombre" hidden style="font-size:13px;color:var(--color-neutral-400);white-space:nowrap"></span>
   </div>
 
   <div id="toast-area"></div>
@@ -93,6 +93,7 @@
     <button class="tab-btn" data-tab="pendientes">Historial de Anuncios</button>
     <button class="tab-btn" data-tab="admin">Agregar Activos / Audiencias</button>
     <button class="tab-btn" data-tab="usuarios">Panel Usuarios</button>
+    <button class="tab-btn" data-tab="creatividades" title="Solo superadmin">Creatividades</button>
   </div>
 
   <div id="estado-carga" style="padding:20px 28px;color:var(--color-neutral-500)" hidden>Cargando…</div>
@@ -113,7 +114,8 @@
         </div>
         <div class="tabs" id="pd2-modo-carga-wrap" style="padding:0;border:none" hidden>
           <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="anuncios" id="pd2-modo-carga-anuncios-label">Pedido de Anuncios</button>
-          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="csv">Cargar CSV</button>
+          <!-- Cargar CSV desactivado por ahora (usuario, 2026-09-14). -->
+          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="csv" disabled title="Por ahora no está disponible" style="opacity:.45;cursor:not-allowed">Cargar CSV</button>
         </div>
       </div>
 
@@ -134,10 +136,12 @@
           <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px" id="pd2-card-anuncios-titulo">Pedido de Anuncios</div>
           <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Una pieza o varias juntas.</div>
         </button>
-        <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" style="padding:22px 20px;text-align:left">
-          <i class="ph ph-table" style="font-size:26px;color:var(--color-accent)"></i>
+        <!-- Cargar CSV desactivado por ahora (usuario, 2026-09-14): queda en
+             gris y sin acción; cambiarModoCargaV2 también lo ignora. -->
+        <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" disabled title="Por ahora no está disponible" style="padding:22px 20px;text-align:left;opacity:.45;cursor:not-allowed;filter:grayscale(1)">
+          <i class="ph ph-table" style="font-size:26px;color:var(--color-neutral-500)"></i>
           <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px">Cargar CSV</div>
-          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Para casos especiales: subí un CSV con varias piezas juntas.</div>
+          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Por ahora no está disponible.</div>
         </button>
       </div>
 
@@ -228,6 +232,7 @@
               </div>
             </div>
           </div>
+          <div id="pd2-aviso-otra" hidden style="margin-top:12px"></div>
           <div id="pd2-cruces-wrap" hidden></div>
           <p id="pd2-modulo-2-error" class="error" style="margin:10px 0 0" hidden></p>
           <div style="display:flex;justify-content:flex-end;margin-top:12px">
@@ -457,6 +462,20 @@
   <!-- Panel Usuarios (solo administradores): alta por mail y accesos por
        Proyecto y Activo. Se renderiza entero desde renderTabUsuarios() en
        app.js — acá solo va el esqueleto de dos columnas. -->
+  <!-- Biblioteca de creatividades (solo superadmin): bucket privado +
+       tabla creatividades, con los datos del pedido asociado. -->
+  <div id="tab-creatividades" style="padding:20px 28px 0" hidden>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:14px">
+      <div class="field" style="margin:0;min-width:200px"><label>Proyecto</label><select class="input" id="crea-proyecto"><option value="">Todos</option></select></div>
+      <div class="field" style="margin:0;min-width:200px"><label>Campaña</label><select class="input" id="crea-campana"><option value="">Todas</option></select></div>
+      <div class="field" style="margin:0;flex:1;min-width:220px"><label>Buscar</label><input class="input" id="crea-texto" placeholder="Código, nombre de archivo, activo…"></div>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;padding-bottom:8px"><input type="checkbox" id="crea-vencidas"> Ver vencidas</label>
+      <button type="button" class="btn btn-secondary" data-action="crea-recargar" style="margin-bottom:1px"><i class="ph ph-arrows-clockwise"></i> Actualizar</button>
+    </div>
+    <p id="crea-estado" style="font-size:12px;color:var(--color-neutral-500);margin:0 0 12px"></p>
+    <div id="crea-lista" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px"></div>
+  </div>
+
   <div id="tab-usuarios" style="padding:20px 28px 0" hidden>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start">
       <div class="expand-panel">

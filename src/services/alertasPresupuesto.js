@@ -97,10 +97,15 @@ function armarMail(filas) {
 // Gmail API (HTTPS) si hay GMAIL_REFRESH_TOKEN — Railway bloquea SMTP
 // saliente (verificado 2026-09-14); SMTP queda como alternativa.
 function gmailConfigurado() {
-  return !!(env.gmailRefreshToken && env.googleClientId && env.googleClientSecret && env.alertasMailTo.length);
+  return !!(env.gmailRefreshToken && env.googleClientId && env.googleClientSecret);
 }
+// Hay por dónde mandar mails (Gmail API o SMTP), sin importar a quién.
+function transporteDisponible() {
+  return gmailConfigurado() || !!(env.smtpHost && env.smtpUser && env.smtpPass);
+}
+// Resumen diario: además hace falta ALERTAS_MAIL_TO.
 function smtpConfigurado() {
-  return gmailConfigurado() || !!(env.smtpHost && env.smtpUser && env.smtpPass && env.alertasMailTo.length);
+  return transporteDisponible() && env.alertasMailTo.length > 0;
 }
 
 function clienteGmail() {
@@ -140,15 +145,20 @@ function transporteSmtp() {
   });
 }
 
-async function enviarMail(asunto, texto) {
-  if (!smtpConfigurado()) throw new Error('Falta configurar el envío: GMAIL_REFRESH_TOKEN (o SMTP_HOST/SMTP_USER/SMTP_PASS) y ALERTAS_MAIL_TO.');
+// destinatarios: lista de mails; por default ALERTAS_MAIL_TO (resumen
+// diario). También lo usa el aviso "pidió asignación de proyectos" a los
+// administradores (ver routes/usuarios.js).
+async function enviarMail(asunto, texto, destinatarios = env.alertasMailTo) {
+  if (!transporteDisponible()) throw new Error('Falta configurar el envío: GMAIL_REFRESH_TOKEN (o SMTP_HOST/SMTP_USER/SMTP_PASS).');
+  const para = (destinatarios || []).map((d) => String(d || '').trim()).filter(Boolean);
+  if (!para.length) throw new Error('No hay destinatarios para el mail.');
   if (gmailConfigurado()) {
     const { gmail } = clienteGmail();
     const from = env.smtpFrom || env.smtpUser || 'me';
-    await gmail.users.messages.send({ userId: 'me', requestBody: { raw: armarMensajeRaw(from, env.alertasMailTo.join(', '), asunto, texto) } });
+    await gmail.users.messages.send({ userId: 'me', requestBody: { raw: armarMensajeRaw(from, para.join(', '), asunto, texto) } });
     return;
   }
-  await transporteSmtp().sendMail({ from: env.smtpFrom || env.smtpUser, to: env.alertasMailTo.join(', '), subject: asunto, text: texto });
+  await transporteSmtp().sendMail({ from: env.smtpFrom || env.smtpUser, to: para.join(', '), subject: asunto, text: texto });
 }
 
 // Prueba el envío desde este servidor sin mandar nada: Gmail API (token y
@@ -208,4 +218,4 @@ function programarEnvioDiario() {
   }, 10 * 60 * 1000);
 }
 
-module.exports = { estadoCuentas, armarMail, enviarResumen, programarEnvioDiario, smtpConfigurado, verificarSmtp };
+module.exports = { estadoCuentas, armarMail, enviarMail, enviarResumen, programarEnvioDiario, smtpConfigurado, transporteDisponible, verificarSmtp };

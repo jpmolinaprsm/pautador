@@ -340,21 +340,22 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
       throw err;
     }
 
-    // Sin audiencia "Otra" (manual) en modo automatizado — ni principal ni
-    // refuerzo, ni por un código CSV vacío o sin match (eso también cae
-    // acá: ver resolverAudiencia en colaPautas.js, es la única fuente de
-    // manual:true fuera del forzado por modo "normal").
+    // Audiencias en modo automatizado: las reales del activo, o "Otra"
+    // (usuario, 2026-09-14: "si la audiencia que quería no estaba, se carga
+    // y avisa que va manual" — resolverAudiencia la deja manual:true y ese
+    // cruce queda manual_pendiente para los implementadores). Un código
+    // que no es ni lo uno ni lo otro (CSV vacío o sin match) se rechaza.
     const audienciasActivo = await getAudienciasPorActivo(activoKey);
-    const esAudienciaValida = (cod) => !!cod && cod.toLowerCase() !== 'otra' && audienciasActivo.some((a) => a.codigo_audiencia === cod);
+    const esAudienciaValida = (cod) => !!cod && (cod.toLowerCase() === 'otra' || audienciasActivo.some((a) => a.codigo_audiencia === cod));
     if (!esAudienciaValida(audienciaCodigo)) {
-      const err = new Error('La audiencia principal tiene que ser una audiencia real guardada en Meta — "Otra" (audiencia manual) no está disponible en Pedido Anuncios Automatizados.');
+      const err = new Error('La audiencia principal tiene que ser una audiencia guardada en Meta de este activo, u "Otra" (se carga a mano).');
       err.status = 400;
       throw err;
     }
     const refuerzoCodigos = Array.isArray(refuerzoAudiencia) ? refuerzoAudiencia : String(refuerzoAudiencia || '').split(',').map((s) => s.trim()).filter(Boolean);
     const refuerzoInvalido = refuerzoCodigos.find((cod) => !esAudienciaValida(cod));
     if (refuerzoInvalido) {
-      const err = new Error(`La audiencia de refuerzo "${refuerzoInvalido}" no es una audiencia real guardada en Meta — "Otra" (audiencia manual) no está disponible en Pedido Anuncios Automatizados.`);
+      const err = new Error(`La audiencia de refuerzo "${refuerzoInvalido}" no es una audiencia guardada en Meta de este activo ni "Otra".`);
       err.status = 400;
       throw err;
     }
@@ -506,7 +507,7 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
       correlationId,
       codigo,
       publicado: false,
-      motivo: 'La audiencia es "Otra" (sin público guardado en Meta): esta pieza se crea a mano. Quedó en Validación de Anuncios para que la marques como hecha.',
+      motivo: 'La audiencia es "Otra" (sin público guardado en Meta): esta pieza la cargan a mano los implementadores. Quedó en Pendientes para que la marquen como hecha.',
     };
   }
 
