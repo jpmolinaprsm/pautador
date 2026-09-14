@@ -19,7 +19,8 @@
 
 | Variable | Para qué |
 |---|---|
-| `INGESTA_ESTADO_INICIAL` | `PAUSED` (hoy) o `ACTIVE` para lo que llega de las hojas salida_manual_*. |
+| `INGESTA_ESTADO_INICIAL` | `PAUSED` o `ACTIVE` (hoy) para lo que llega de las hojas salida_manual_*. |
+| `AUTOMATIZADO_ESTADO_INICIAL` | `PAUSED` (default) o `ACTIVE` para los pedidos automatizados hechos desde la pantalla. Lanzamiento 2026-09-16: `ACTIVE`. |
 | `INGESTA_MINUTOS` | Cada cuántos minutos se revisan las hojas (0 = solo por webhook). |
 | `TAREAS_SHEET_ID` | Planilla "Tareas" (Make → Asana). La de producción está bloqueada en código hasta que se autorice. |
 | `CODIGOS_SHEET_ID` | Hoja CodigosContenido de AppSheet: secuencia de códigos y fila por pedido. |

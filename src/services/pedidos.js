@@ -62,8 +62,14 @@ const { buscarUltimoMismoCruce } = require('./repartoSugerido');
 // celdas a manual, así confirmarPauta las deja "manual_pendiente" en vez
 // de crear nada en Meta, y la única acción que queda es marcarlas hechas
 // desde Historial (mismo mecanismo que ya existía para audiencia "Otra").
-async function crearPedido(datos, usuario, { publicar = false, soloValidar = false, modo } = {}) {
+// `origen` viene SOLO de opciones (lo pasa ingestaSheets.js), nunca del
+// body del request: 'ingesta' es el único origen que crea ACTIVO en Meta
+// (INGESTA_ESTADO_INICIAL) y saltea la fila en CodigosContenido — hasta el
+// 2026-09-14 se leía de datos.origen y cualquier pedido por API podía
+// mandarlo.
+async function crearPedido(datos, usuario, { publicar = false, soloValidar = false, modo, origen = '' } = {}) {
   const modoResuelto = modo === 'automatizado' ? 'automatizado' : 'normal';
+  const origenResuelto = origen === 'ingesta' ? 'ingesta' : '';
   const {
     proyecto, activoKey, ejeCodigo, tipoCodigo, campana, linea, visibilidad, formato,
     objetivo, audienciaCodigo, otraAudiencia, refuerzoAudiencia, otrasRefuerzo,
@@ -115,7 +121,7 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // config_activos.presupuesto_default (leído del BM 2026-09-14: El Norte
   // Ahora 15.000, Valle 24 7.500, Noticia Franca 10.000) — pisa el monto
   // genérico del Tipo "0".
-  if (datos.origen === 'ingesta' && activoKey) {
+  if (origenResuelto === 'ingesta' && activoKey) {
     const activoIngesta = await getActivoPorKey(activoKey);
     if (activoIngesta && Number(activoIngesta.presupuesto_default) > 0) presupuesto = Number(activoIngesta.presupuesto_default);
   }
@@ -140,7 +146,7 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // Predefinido de esta etapa (usuario, 2026-09-14): mismo total que la
   // última vez en este cruce Activo × Tipo × Objetivos × Audiencias. Sin
   // historial queda la escala. La ingesta tiene su monto por medio.
-  if (!publicar && datos.origen !== 'ingesta' && tipoCodigo && activoKey && audienciaCodigo) {
+  if (!publicar && origenResuelto !== 'ingesta' && tipoCodigo && activoKey && audienciaCodigo) {
     const audienciasCruce = [audienciaCodigo, ...(Array.isArray(refuerzoAudiencia) ? refuerzoAudiencia : String(refuerzoAudiencia || '').split(',').map((s) => s.trim()).filter(Boolean))];
     const ultimo = await buscarUltimoMismoCruce({ activoKey, tipoCodigo, objetivos: objetivosElegidos, audiencias: audienciasCruce }).catch(() => null);
     if (ultimo && Number(ultimo.presupuesto) > 0) presupuesto = Number(ultimo.presupuesto);
@@ -423,10 +429,10 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     bulk_id: bulkId || '',
     modo: modoResuelto,
     // 'ingesta' (hojas salida_manual_*) es el único origen que puede crear
-    // ACTIVO (ver confirmar.js/estadoInicial). Se manda solo cuando viene:
-    // la columna es de migration_005 y un pedido normal no debe depender
-    // de que esa migración ya esté corrida.
-    ...(datos.origen ? { origen: datos.origen } : {}),
+    // ACTIVO (ver confirmar.js/estadoInicial). Se manda solo cuando viene
+    // de opciones (nunca del body): la columna es de migration_005 y un
+    // pedido normal no debe depender de que esa migración ya esté corrida.
+    ...(origenResuelto ? { origen: origenResuelto } : {}),
   };
   try {
     await insertarFilaColaPautas(filaNueva);

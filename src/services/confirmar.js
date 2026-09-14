@@ -99,11 +99,14 @@ async function confirmarPauta(correlationId, celdasEditadas, confirmadoPor) {
 
   const { equivObjetivo, equivTipo, formato, activo, plataformasResueltas } = await resolverEquivalencias(pauta);
   // formato va en el contexto porque define el placement (Feed vs Reels).
-  // estadoInicial: siempre PAUSED, salvo las pautas de la ingesta automática
-  // (origen 'ingesta') cuando el usuario haya puesto INGESTA_ESTADO_INICIAL=
-  // ACTIVE — es el único camino por el que algo puede salir gastando plata
-  // sin que una persona lo active a mano en Ads Manager.
-  const estadoInicial = pauta.origen === 'ingesta' ? env.ingestaEstadoInicial : 'PAUSED';
+  // estadoInicial: la ingesta automática (origen 'ingesta') sale con
+  // INGESTA_ESTADO_INICIAL; los pedidos automatizados de la pantalla con
+  // AUTOMATIZADO_ESTADO_INICIAL (lanzamiento 2026-09-16: ACTIVE); todo lo
+  // demás PAUSED. Son las dos únicas variables por las que algo puede salir
+  // gastando plata sin que una persona lo active a mano en Ads Manager.
+  let estadoInicial = 'PAUSED';
+  if (pauta.origen === 'ingesta') estadoInicial = env.ingestaEstadoInicial;
+  else if (pauta.modo === 'automatizado') estadoInicial = env.automatizadoEstadoInicial;
   const ctxMeta = { activo, equivObjetivo, equivTipo, formato, estadoInicial };
   const confirmadoEn = new Date().toISOString();
 

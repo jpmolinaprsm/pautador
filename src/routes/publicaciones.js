@@ -8,7 +8,7 @@ const { buscarUltimoMismoCruce } = require('../services/repartoSugerido');
 const MAX_AUDIENCIAS_POR_PROYECTO = 10;
 const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config/mvp');
 const { PLATAFORMAS, MODO_POR_FORMATO, categoriasPara } = require('../config/plataformas');
-const { volumenPorProyectoDesde } = require('../services/codigosSheet');
+const { volumenPorProyectoDesde, filasDesde } = require('../services/codigosSheet');
 const { proyectosVisibles } = require('../services/proyectos');
 const { generarSiguienteCodigo } = require('../services/codigoGenerator');
 const { readTable, insertarFila } = require('../services/dataSource');
@@ -257,14 +257,25 @@ router.get('/tipos', async (req, res) => {
 });
 
 // GET /api/campanas?proyecto=... — nombres de campaña ya usados en ese
-// proyecto, como sugerencias (datalist) del campo "Campana" de Pedido de
-// Pauta — AppSheet permite elegir una existente o escribir una nueva.
+// proyecto, de la más reciente a la más vieja: hoja CodigosContenido (el
+// histórico real de AppSheet) + cola_pautas (lo creado acá). El front
+// muestra las últimas 20 en el desplegable y busca sobre todas al tipear
+// (usuario, 2026-09-14); escribir una nueva sigue valiendo.
 router.get('/campanas', requireRol('pm_cuentas', 'implementador', 'administrador'), async (req, res) => {
   try {
-    const filas = await readTable('cola_pautas');
-    const nombres = [...new Set(
-      filas.filter((f) => f.correlation_id && f.proyecto === req.query.proyecto).map((f) => f.campana).filter(Boolean)
-    )].sort();
+    const proyecto = String(req.query.proyecto || '').trim();
+    const ultimaFecha = new Map(); // nombre normalizado -> { nombre, fecha }
+    const sumar = (nombre, fecha) => {
+      const limpio = String(nombre || '').trim();
+      if (!limpio) return;
+      const k = limpio.toLowerCase();
+      const f = String(fecha || '');
+      if (!ultimaFecha.has(k) || ultimaFecha.get(k).fecha < f) ultimaFecha.set(k, { nombre: limpio, fecha: f });
+    };
+    const [filas, hoja] = await Promise.all([readTable('cola_pautas'), filasDesde('2000-01-01').catch(() => null)]);
+    filas.filter((f) => f.correlation_id && f.proyecto === proyecto).forEach((f) => sumar(f.campana, String(f.fecha || '').slice(0, 10)));
+    (hoja || []).filter((f) => String(f.Proyecto || '').trim() === proyecto).forEach((f) => sumar(f.Campana, f.fechaIso));
+    const nombres = [...ultimaFecha.values()].sort((a, b) => (b.fecha > a.fecha ? 1 : b.fecha < a.fecha ? -1 : a.nombre.localeCompare(b.nombre, 'es'))).map((x) => x.nombre);
     res.json(nombres);
   } catch (err) {
     console.error('[campanas]', err.message);

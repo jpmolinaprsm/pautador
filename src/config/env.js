@@ -76,6 +76,10 @@ const env = {
   // defecto; ACTIVE = gasto real inmediato — se cambia solo a pedido del
   // usuario. Ningún otro origen (pedido/csv) lo usa.
   ingestaEstadoInicial: (process.env.INGESTA_ESTADO_INICIAL || 'PAUSED').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
+  // Estado inicial en Meta de los pedidos AUTOMATIZADOS hechos desde la
+  // pantalla (lanzamiento 2026-09-16: ACTIVE). PAUSED por default: activar
+  // gasto real es una decisión de configuración, nunca de un botón.
+  automatizadoEstadoInicial: (process.env.AUTOMATIZADO_ESTADO_INICIAL || 'PAUSED').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
 
   // --- Creatividades en Supabase Storage (punto 5 del plan) ---
   // Apagado hasta correr migration_006 (tabla creatividades): con 0 los

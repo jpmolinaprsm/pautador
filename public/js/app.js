@@ -2207,6 +2207,22 @@ async function cargarCampanasSugeridas(proyecto) {
   return r.ok ? await r.json() : [];
 }
 
+// Desplegable de "Campaña / Comunicación" (usuario, 2026-09-14): con el
+// campo vacío muestra las últimas 20 campañas del proyecto (el server las
+// manda de la más reciente a la más vieja); al tipear busca sobre TODAS
+// las del proyecto y muestra hasta 20 coincidencias. Lo que no está en la
+// lista se acepta igual como campaña nueva.
+const MAX_CAMPANAS_VISIBLES = 20;
+function renderCampanasDatalistPd2() {
+  const datalist = document.getElementById('pd-campana-lista');
+  const input = document.getElementById('pd2-campana');
+  if (!datalist) return;
+  const texto = (input ? input.value : '').trim().toLowerCase();
+  const todas = state.pd2CampanasSugeridas || [];
+  const lista = (texto ? todas.filter((c) => c.toLowerCase().includes(texto)) : todas).slice(0, MAX_CAMPANAS_VISIBLES);
+  datalist.innerHTML = lista.map((c) => `<option value="${esc(c)}">`).join('');
+}
+
 // El desplegable de Activo muestra TODOS los activos reales del proyecto
 // (pedido del usuario: "tienen que aparecer todos") — es un campo de
 // referencia/registro (queda en "activo_solicitado"), y también el que
@@ -3524,8 +3540,7 @@ function renderTabPedido2() {
   document.getElementById('pd2-bulk-crear').hidden = !state.pd2BulkItems.length;
   document.getElementById('pd2-cantidad-piezas').value = String(state.pd2BulkItems.length || 1);
 
-  const datalist = document.getElementById('pd-campana-lista');
-  if (datalist) datalist.innerHTML = state.pd2CampanasSugeridas.map((c) => `<option value="${esc(c)}">`).join('');
+  renderCampanasDatalistPd2();
 
   // Solo "Crear Anuncios": presupuesto por tramos fijos, elegido a mano —
   // Pedido de Pauta (PM) no lo ve, el servidor lo resuelve solo (Tipo ×
@@ -6198,6 +6213,7 @@ document.getElementById('pantalla-proyecto-usuario-select').addEventListener('ch
 // posible al momento en que se define este bloque).
 document.addEventListener('input', (e) => {
   if (e.target.id === 'hist-buscar') { state.historial.busqueda = e.target.value; renderHistorialSheet(state.items.map((it) => buildVM(it))); return; }
+  if (e.target.id === 'pd2-campana') { renderCampanasDatalistPd2(); return; }
   // Si se toca el material, lo verificado deja de valer: hay que volver a
   // verificar antes de poder crear.
   if (e.target.id && /^pd2bulk\d+-material$/.test(e.target.id) && state.pd2BulkPreviews) {

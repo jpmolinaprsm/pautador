@@ -133,7 +133,7 @@ function filaAPedido(hoja, fila, ejes) {
     fechaFin: sumarDias(fechaInicio, duracionDias(fila.Duracion)),
     redes: ['facebook'],
     codigoExterno: codigo,
-    origen: 'ingesta',
+    // origen 'ingesta' va por opciones de crearPedido, no acá (ver pedidos.js).
     comentarios: `Ingesta automática — ${hoja}`,
   };
 }
@@ -177,7 +177,7 @@ async function procesarFilas(hoja, filas) {
     try {
       const datos = filaAPedido(hoja, fila, ejes);
       // eslint-disable-next-line no-await-in-loop
-      const r = await crearPedido(datos, USUARIO_INGESTA, { modo: 'automatizado' });
+      const r = await crearPedido(datos, USUARIO_INGESTA, { modo: 'automatizado', origen: 'ingesta' });
       // eslint-disable-next-line no-await-in-loop
       await registrar({ correlation_id: r.correlationId, estado: 'creada', error: '' });
       resultados.push({ fila_id: filaId, estado: 'creada', correlation_id: r.correlationId, codigo: r.codigo, publicado: r.publicado });
