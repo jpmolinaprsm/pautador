@@ -39,6 +39,7 @@ const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config
 const { replicarATareas } = require('./tareasSheet');
 const { registrarCodigo, recordarCodigo } = require('./codigosSheet');
 const { etiquetarCreatividad } = require('./storage');
+const { buscarUltimoMismoCruce } = require('./repartoSugerido');
 
 
 
@@ -136,6 +137,14 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   const plataforma = plataformaInfo.nombre;
   const esMeta = plataformaInfo.esMeta;
   const objetivosElegidos = Array.isArray(objetivo) ? objetivo : String(objetivo || '').split(',').map((s) => s.trim()).filter(Boolean);
+  // Predefinido de esta etapa (usuario, 2026-09-14): mismo total que la
+  // última vez en este cruce Activo × Tipo × Objetivos × Audiencias. Sin
+  // historial queda la escala. La ingesta tiene su monto por medio.
+  if (!publicar && datos.origen !== 'ingesta' && tipoCodigo && activoKey && audienciaCodigo) {
+    const audienciasCruce = [audienciaCodigo, ...(Array.isArray(refuerzoAudiencia) ? refuerzoAudiencia : String(refuerzoAudiencia || '').split(',').map((s) => s.trim()).filter(Boolean))];
+    const ultimo = await buscarUltimoMismoCruce({ activoKey, tipoCodigo, objetivos: objetivosElegidos, audiencias: audienciasCruce }).catch(() => null);
+    if (ultimo && Number(ultimo.presupuesto) > 0) presupuesto = Number(ultimo.presupuesto);
+  }
   if (!esMeta) {
     if (visibilidad !== 'DARK') {
       const err = new Error(`En ${plataforma} no hay "Público" (publicación existente): la pieza se carga como anuncio nuevo (Oculto).`);

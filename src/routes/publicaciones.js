@@ -3,6 +3,7 @@ const { getActivos, getActivoPorKey } = require('../services/configActivos');
 const { getPublicacionesRecientes, resolverPostDesdeLink } = require('../services/metaContent');
 const { limpiarNombreAudiencia } = require('../services/colaPautas');
 const { getCatalogoPorProyecto, usoPorProyectoCanal } = require('../services/audiencias');
+const { buscarUltimoMismoCruce } = require('../services/repartoSugerido');
 
 const MAX_AUDIENCIAS_POR_PROYECTO = 10;
 const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config/mvp');
@@ -389,6 +390,24 @@ router.get('/audiencias', async (req, res) => {
   } catch (err) {
     console.error('[audiencias]', err.message);
     res.status(500).json({ error: 'No se pudo leer equiv_audiencia', detalle: err.message });
+  }
+});
+
+// GET /api/reparto-sugerido?activoKey=&tipoCodigo=&objetivos=a,b&audiencias=x,y
+// — reparto y total del último pedido confirmado con ese mismo cruce (ver
+// services/repartoSugerido.js). {} si no hay historial.
+router.get('/reparto-sugerido', async (req, res) => {
+  try {
+    const lista = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const r = await buscarUltimoMismoCruce({
+      activoKey: String(req.query.activoKey || ''),
+      tipoCodigo: String(req.query.tipoCodigo || ''),
+      objetivos: lista(req.query.objetivos),
+      audiencias: lista(req.query.audiencias),
+    });
+    res.json(r || {});
+  } catch (err) {
+    res.json({});
   }
 });
 

@@ -165,9 +165,10 @@ const state = {
   // reparto de "Crear Anuncios" bulk (repartoParejo/repartoConExclusionesV2/
   // repartoTrasMoverSliderV2 en vez de duplicar la lógica).
   pd2CombosExcluidos: {},
-  pd2RepartoObjetivo: null,
-  pd2RepartoAud: {},
+  pd2Reparto: null,
+  pd2RepartoBloqueados: {},
   pd2RepartoFirma: null,
+  pd2RepartoSugerido: null,
   // Presupuesto total resuelto por el servidor (Tipo × tamaño de Audiencia)
   // — en "Pedido de Pauta" nunca se elige a mano, así que el panel de
   // reparto lo pide solo para mostrar montos en pesos (ver
@@ -3236,16 +3237,54 @@ function pesosParejos(claves) {
 
 // Si cambió la "forma" (otros Objetivos u otras Audiencias), el reparto
 // anterior ya no aplica: se vuelve a parejo en los dos niveles.
-function asegurarRepartoPd2() {
+// Reparto plano: una línea por cruce Objetivo × Audiencia (usuario,
+// 2026-09-14), cada una con su % del total, se puede desactivar (checkbox)
+// o bloquear (candado: no se mueve cuando se ajustan las demás). Nadie ve
+// montos acá — el presupuesto lo resuelve el servidor.
+// state.pd2Reparto = { "Objetivo|codigo": pct }, state.pd2RepartoBloqueados
+// = { clave: true }, state.pd2CombosExcluidos = { clave: true }.
+function combosRepartoPd2() {
   const objetivos = leerCheckboxes('pd2-objetivo-chk');
   const auds = audienciasDelPd2();
-  const firma = objetivos.join('~') + '||' + auds.map((a) => a.codigo).join('~');
-  if (state.pd2RepartoFirma === firma && state.pd2RepartoObjetivo) return;
+  const combos = [];
+  objetivos.forEach((obj) => auds.forEach((a) => combos.push({ objetivo: obj, audiencia: a, clave: obj + '|' + a.codigo })));
+  return combos;
+}
+
+function asegurarRepartoPd2() {
+  const combos = combosRepartoPd2();
+  const firma = combos.map((c) => c.clave).join('~');
+  if (state.pd2RepartoFirma === firma && state.pd2Reparto) return;
   state.pd2RepartoFirma = firma;
-  state.pd2RepartoObjetivo = pesosParejos(objetivos);
-  state.pd2RepartoAud = {};
-  objetivos.forEach((o) => { state.pd2RepartoAud[o] = pesosParejos(auds.map((a) => a.codigo)); });
+  state.pd2Reparto = normalizar100({}, combos.map((c) => c.clave));
+  state.pd2RepartoBloqueados = {};
   state.pd2CombosExcluidos = {};
+  state.pd2RepartoSugerido = null;
+  pedirRepartoSugeridoPd2(firma, combos);
+}
+
+// Predefinido de esta primera etapa: lo mismo que se asignó la última vez
+// en este mismo cruce Activo × Tipo × Objetivos × Audiencias (servidor:
+// /api/reparto-sugerido). Si no hay historial, queda parejo.
+async function pedirRepartoSugeridoPd2(firma, combos) {
+  if (!combos.length || !state.pd2ActivoKey || !state.pd2TipoCodigo) return;
+  const objetivos = [...new Set(combos.map((c) => c.objetivo))];
+  const audiencias = [...new Set(combos.map((c) => c.audiencia.codigo))];
+  try {
+    const r = await apiFetch('/api/reparto-sugerido?activoKey=' + encodeURIComponent(state.pd2ActivoKey)
+      + '&tipoCodigo=' + encodeURIComponent(state.pd2TipoCodigo)
+      + '&objetivos=' + encodeURIComponent(objetivos.join(','))
+      + '&audiencias=' + encodeURIComponent(audiencias.join(',')));
+    const data = r.ok ? await r.json() : null;
+    if (!data || !data.reparto || state.pd2RepartoFirma !== firma) return;
+    const claves = combos.map((c) => c.clave);
+    const conDatos = claves.filter((k) => data.reparto[k] !== undefined);
+    if (!conDatos.length) return;
+    state.pd2Reparto = normalizar100(Object.fromEntries(claves.map((k) => [k, Number(data.reparto[k]) || 0])), claves);
+    claves.forEach((k) => { if (!(Number(data.reparto[k]) > 0)) state.pd2CombosExcluidos[k] = true; });
+    state.pd2RepartoSugerido = { codigo: data.codigo, fecha: data.fecha };
+    renderCrucesV2();
+  } catch (e) { /* sin sugerencia: queda parejo */ }
 }
 
 // Pasa pesos crudos a porcentajes que suman 100 EXACTO (el resto del
@@ -3266,64 +3305,50 @@ function normalizar100(pesos, claves) {
   return mapa;
 }
 
-// Mueve un slider dejando el resto proporcional a lo que ya tenía, para que
-// el nivel siga cerrando en 100 sin tener que tocar los demás a mano.
-function moverPeso(pesos, claves, claveMovida, valor) {
-  const v = Math.max(0, Math.min(100, valor));
-  const otros = claves.filter((k) => k !== claveMovida);
+// Mueve una línea: las bloqueadas no se tocan, las demás activas absorben
+// el resto proporcional a lo que tenían. Siempre cierra en 100.
+function moverPesoConBloqueos(pesos, clavesActivas, bloqueados, claveMovida, valor) {
+  const libres = clavesActivas.filter((k) => !bloqueados[k]);
+  const fijas = clavesActivas.filter((k) => bloqueados[k] && k !== claveMovida);
+  const sumaFijas = fijas.reduce((a, k) => a + (Number(pesos[k]) || 0), 0);
+  const disponible = Math.max(0, +(100 - sumaFijas).toFixed(2));
+  const v = Math.max(0, Math.min(disponible, valor));
   const nuevo = {};
+  fijas.forEach((k) => { nuevo[k] = Number(pesos[k]) || 0; });
   nuevo[claveMovida] = v;
-  const restante = Math.max(0, 100 - v);
+  const otros = libres.filter((k) => k !== claveMovida);
+  const restante = Math.max(0, +(disponible - v).toFixed(2));
   const pesoAnterior = otros.reduce((a, k) => a + (Number(pesos[k]) || 0), 0);
   otros.forEach((k) => {
-    nuevo[k] = pesoAnterior > 0
-      ? (restante * (Number(pesos[k]) || 0)) / pesoAnterior
-      : restante / (otros.length || 1);
+    nuevo[k] = pesoAnterior > 0 ? +((restante * (Number(pesos[k]) || 0)) / pesoAnterior).toFixed(2) : +(restante / (otros.length || 1)).toFixed(2);
   });
+  const suma = clavesActivas.reduce((a, k) => a + (nuevo[k] || 0), 0);
+  const ajuste = otros.length ? otros[otros.length - 1] : claveMovida;
+  nuevo[ajuste] = +((nuevo[ajuste] || 0) + (100 - suma)).toFixed(2);
   return nuevo;
 }
 
-// Única fuente de verdad de los porcentajes: la usan tanto el render como el
-// envío, así lo que se ve en pantalla es exactamente lo que se manda.
+// Única fuente de verdad de los porcentajes: la usan el render y el envío.
+// Devuelve una línea por cruce; las desactivadas van en 0.
 function repartoResueltoPd2() {
   asegurarRepartoPd2();
-  const objetivos = leerCheckboxes('pd2-objetivo-chk');
-  const auds = audienciasDelPd2();
-  const activasDe = (obj) => auds.filter((a) => !state.pd2CombosExcluidos[obj + '|' + a.codigo]);
-  const objetivosActivos = objetivos.filter((o) => activasDe(o).length > 0);
-  const pctObjetivo = normalizar100(state.pd2RepartoObjetivo || {}, objetivosActivos);
-  return objetivos.map((obj) => {
-    const activas = activasDe(obj);
-    const pctAud = normalizar100((state.pd2RepartoAud || {})[obj] || {}, activas.map((a) => a.codigo));
-    const pctObj = pctObjetivo[obj] || 0;
-    return {
-      objetivo: obj,
-      activo: objetivosActivos.indexOf(obj) !== -1,
-      pct: pctObj,
-      audiencias: auds.map((a) => {
-        const excluida = !!state.pd2CombosExcluidos[obj + '|' + a.codigo];
-        const pctEnObjetivo = excluida ? 0 : (pctAud[a.codigo] || 0);
-        return Object.assign({}, a, {
-          excluida,
-          pctEnObjetivo,
-          pctTotal: +((pctObj * pctEnObjetivo) / 100).toFixed(2),
-        });
-      }),
-    };
-  });
+  const combos = combosRepartoPd2();
+  const activas = combos.filter((c) => !state.pd2CombosExcluidos[c.clave]).map((c) => c.clave);
+  const pct = normalizar100(state.pd2Reparto || {}, activas);
+  return combos.map((c) => ({
+    objetivo: c.objetivo,
+    audiencia: c.audiencia,
+    clave: c.clave,
+    excluida: !!state.pd2CombosExcluidos[c.clave],
+    bloqueada: !!state.pd2RepartoBloqueados[c.clave],
+    pct: state.pd2CombosExcluidos[c.clave] ? 0 : (pct[c.clave] || 0),
+  }));
 }
 
-// {"Objetivo|codigo_audiencia": pct} — formato que espera el servidor
-// (getMatrizParaPauta en colaPautas.js).
+// {"Objetivo|codigo_audiencia": pct} — formato que espera el servidor.
 function repartoPlanoPd2() {
   const mapa = {};
-  repartoResueltoPd2().forEach((f) => {
-    if (!f.activo) return;
-    // Una celda en 0% no se manda: sería un conjunto de anuncios sin plata,
-    // que Meta rechaza igual. Va como excluida (ver excluidosParaEnvioPd2),
-    // así el servidor ve las mismas celdas en el reparto y en los excluidos.
-    f.audiencias.forEach((a) => { if (!a.excluida && a.pctTotal > 0) mapa[f.objetivo + '|' + a.codigo] = a.pctTotal; });
-  });
+  repartoResueltoPd2().forEach((f) => { if (!f.excluida && f.pct > 0) mapa[f.clave] = f.pct; });
   const claves = Object.keys(mapa);
   if (claves.length) {
     const suma = claves.reduce((a, k) => a + mapa[k], 0);
@@ -3333,20 +3358,16 @@ function repartoPlanoPd2() {
   return mapa;
 }
 
-// Excluidos que viajan con el pedido: los destildados a mano MÁS los que
-// quedaron en 0% moviendo los sliders — para el servidor son lo mismo (ese
-// cruce no se crea).
+// Excluidos que viajan con el pedido: los destildados MÁS los que quedaron
+// en 0% — para el servidor son lo mismo (ese cruce no se crea).
 function excluidosParaEnvioPd2() {
   const fuera = Object.assign({}, state.pd2CombosExcluidos);
-  repartoResueltoPd2().forEach((f) => f.audiencias.forEach((a) => {
-    if (!f.activo || a.pctTotal <= 0) fuera[f.objetivo + '|' + a.codigo] = true;
-  }));
+  repartoResueltoPd2().forEach((f) => { if (f.excluida || f.pct <= 0) fuera[f.clave] = true; });
   return Object.keys(fuera);
 }
 
 // "Pedido de Pauta" nunca elige el presupuesto a mano — se lo pide al
-// servidor (mismo cálculo que va a usar al confirmar) solo para poder
-// mostrar montos mientras se mueven los sliders.
+// servidor solo para validar mínimos; acá no se muestra ningún monto.
 async function actualizarPresupuestoPreviewPd2() {
   if (state.pd2ModoDirecto) return;
   const activoKey = state.pd2ActivoKey;
@@ -3368,98 +3389,58 @@ function renderCrucesV2() {
   const wrap = document.getElementById('pd2-cruces-wrap');
   if (!wrap) return;
   const filas = repartoResueltoPd2();
-  const totalCombos = filas.reduce((a, f) => a + f.audiencias.length, 0);
-
-  if (totalCombos <= 1) {
+  if (filas.length <= 1) {
     wrap.hidden = true;
     wrap.innerHTML = '';
     return;
   }
 
-  const presupuesto = state.pd2ModoDirecto
-    ? (Number((document.getElementById('pd2-presupuesto-default') || {}).value || 0) || 0)
-    : (state.pd2PresupuestoPreview || 0);
-  const dias = diasDeLaPieza(
-    (document.getElementById('pd2-fecha-inicio') || {}).value || '',
-    (document.getElementById('pd2-fecha-fin') || {}).value || ''
-  );
-  const minDiario = state.limites && state.limites.minDiario;
-  const minPorConjunto = minDiario ? minDiario * dias : 0;
-  const montoDe = (pct) => Math.round((presupuesto * pct) / 100);
-
-  // Un color por Objetivo: lo comparten la barra de arriba y el punto de
-  // cada fila, así se lee de un vistazo cuánto se lleva cada uno.
   const COLORES = ['var(--color-accent)', '#2a9d8f', '#e76f51', '#8d6cab', '#c9a227', '#5c7cfa'];
-  const colorDe = (i) => COLORES[i % COLORES.length];
-  const objetivosActivos = filas.filter((f) => f.activo).length;
-  const inputPct = (accion, datos, valor, deshabilitado, titulo) => '<input type="number" min="0" max="100" step="1" value="' + Math.round(valor) + '" '
-    + (deshabilitado ? 'disabled ' : '') + 'data-action="' + accion + '" ' + datos + ' title="' + esc(titulo || '') + '" '
-    + 'style="width:64px;padding:4px 6px;text-align:right;border:1px solid var(--color-divider);border-radius:4px;background:var(--color-surface, #fff);color:inherit;font-family:var(--font-heading);font-size:13px' + (deshabilitado ? ';opacity:.5;background:transparent' : '') + '">';
-  const nota = (texto) => '<span style="display:inline-block;width:178px;text-align:left;color:var(--color-neutral-500);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle">' + texto + '</span>';
+  const objetivos = [...new Set(filas.map((f) => f.objetivo))];
+  const colorDe = (obj) => COLORES[objetivos.indexOf(obj) % COLORES.length];
+  const activas = filas.filter((f) => !f.excluida);
+  const libres = activas.filter((f) => !f.bloqueada);
 
-  // Barra apilada: un tramo por conjunto (objetivo × audiencia), del color
-  // del objetivo, con el ancho de su % del total.
-  const tramos = [];
-  filas.forEach((f, i) => {
-    if (!f.activo) return;
-    f.audiencias.forEach((a, j) => {
-      if (a.excluida || !(a.pctTotal > 0)) return;
-      tramos.push('<div title="' + esc(f.objetivo + ' · ' + a.nombre + ': ' + a.pctTotal + '%') + '" style="width:' + a.pctTotal + '%;background:' + colorDe(i) + ';opacity:' + (j % 2 ? '.72' : '1') + ';border-right:1px solid var(--color-surface, #fff)"></div>');
-    });
-  });
+  // Barra apilada: un tramo por cruce activo, del color del objetivo.
+  const tramos = filas.filter((f) => !f.excluida && f.pct > 0).map((f, i) => '<div title="' + esc(f.objetivo + ' · ' + f.audiencia.nombre + ': ' + f.pct + '%') + '" style="width:' + f.pct + '%;background:' + colorDe(f.objetivo) + ';opacity:' + (i % 2 ? '.72' : '1') + ';border-right:1px solid var(--color-surface, #fff)"></div>');
   const barra = '<div style="display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--color-divider);margin-bottom:10px">' + tramos.join('') + '</div>';
 
-  const celda = (contenido, estilo) => '<td style="padding:7px 8px;border-top:1px solid var(--color-divider);vertical-align:middle;' + (estilo || '') + '">' + contenido + '</td>';
-  const filasHtml = [];
-  filas.forEach((f, i) => {
-    const activasEnObjetivo = f.audiencias.filter((a) => !a.excluida).length;
-    filasHtml.push('<tr style="background:var(--color-surface-2, rgba(127,127,127,.06))' + (f.activo ? '' : ';opacity:.5') + '">'
-      + celda('<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + colorDe(i) + ';margin-right:8px;vertical-align:middle"></span><span style="font-family:var(--font-heading);font-size:14px">' + esc(f.objetivo) + '</span>')
-      + celda(inputPct('pd2-obj-slider', 'data-objetivo="' + esc(f.objetivo) + '"', f.pct, !f.activo || objetivosActivos <= 1, 'Porcentaje del total para ' + f.objetivo) + ' ' + nota('% del total'), 'white-space:nowrap;text-align:right')
-      + celda(presupuesto ? '<span style="font-family:var(--font-heading)">' + esc(fmtMoney(montoDe(f.pct))) + '</span>' : '', 'text-align:right;white-space:nowrap')
-      + '</tr>');
-    f.audiencias.forEach((a) => {
-      const monto = montoDe(a.pctTotal);
-      const bajoMinimo = !a.manual && !a.excluida && minPorConjunto && a.pctTotal > 0 && monto < minPorConjunto;
-      const datos = 'data-objetivo="' + esc(f.objetivo) + '" data-aud="' + esc(a.codigo) + '"';
-      filasHtml.push('<tr' + (a.excluida ? ' style="opacity:.45"' : '') + '>'
-        + celda('<label style="display:flex;align-items:center;gap:8px;padding-left:22px;cursor:pointer">'
-          + '<input type="checkbox" ' + (a.excluida ? '' : 'checked') + ' title="Incluir este conjunto" data-action="pd2-excluir-cruce" ' + datos + ' style="width:15px;height:15px;accent-color:var(--color-accent);flex:none">'
-          + '<span style="font-size:13px">' + esc(a.nombre) + '</span>'
-          + (a.manual ? '<span class="tag tag-outline" style="font-size:10px">a mano</span>' : '')
-          + '</label>')
-        + celda('<input type="range" min="0" max="100" step="1" value="' + Math.round(a.pctEnObjetivo) + '" ' + (a.excluida || !f.activo || activasEnObjetivo <= 1 ? 'disabled ' : '') + 'data-action="pd2-aud-slider" ' + datos + ' style="width:150px;vertical-align:middle;margin-right:8px;accent-color:' + colorDe(i) + (a.excluida || !f.activo || activasEnObjetivo <= 1 ? ';opacity:.4' : '') + '">'
-          + inputPct('pd2-aud-slider', datos, a.pctEnObjetivo, a.excluida || !f.activo || activasEnObjetivo <= 1, 'Porcentaje de ' + f.objetivo + ' para ' + a.nombre)
-          + ' ' + nota('% de ' + esc(f.objetivo) + ' · ' + a.pctTotal + '% del total'), 'white-space:nowrap;text-align:right')
-        + celda(presupuesto ? '<span style="color:' + (bajoMinimo ? 'var(--color-warning, #d08a1e)' : 'inherit') + '"' + (bajoMinimo ? ' title="Bajo el mínimo de Meta para estos días"' : '') + '>' + esc(fmtMoney(monto)) + (bajoMinimo ? ' <i class="ph ph-warning"></i>' : '') + '</span>' : '', 'text-align:right;white-space:nowrap')
-        + '</tr>');
-    });
-  });
-  const tabla = '<div style="overflow-x:auto;border:1px solid var(--color-divider);border-radius:var(--radius-md)">'
-    + '<table style="width:100%;border-collapse:collapse;font-size:13px">'
-    + '<thead><tr style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-500)">'
-    +   '<th style="text-align:left;padding:8px 8px;font-weight:500">Conjunto de anuncios</th>'
-    +   '<th style="text-align:right;padding:8px 8px;font-weight:500">Reparto</th>'
-    +   '<th style="text-align:right;padding:8px 8px;font-weight:500">' + (presupuesto ? 'Importe' : '') + '</th>'
-    + '</tr></thead><tbody>' + filasHtml.join('') + '</tbody></table></div>';
-  const bloques = barra + tabla;
+  const lineas = filas.map((f) => {
+    const datos = 'data-clave="' + esc(f.clave) + '"';
+    // Una sola activa: no hay nada que repartir (siempre 100).
+    const fijo = f.excluida || activas.length <= 1 || (f.bloqueada) || (libres.length <= 1 && !f.bloqueada);
+    const colorIn = f.excluida ? 'var(--color-neutral-500)' : colorDe(f.objetivo);
+    return '<div style="display:flex;align-items:center;gap:12px;padding:8px 10px;border-top:1px solid var(--color-divider)' + (f.excluida ? ';opacity:.45' : '') + '">'
+      + '<input type="checkbox" ' + (f.excluida ? '' : 'checked') + ' title="' + (f.excluida ? 'Activar este cruce' : 'Desactivar este cruce') + '" data-action="pd2-excluir-cruce" ' + datos + ' style="width:16px;height:16px;accent-color:var(--color-accent);flex:none">'
+      + '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + colorDe(f.objetivo) + ';flex:none"></span>'
+      + '<div class="row-ellip" style="flex:1;min-width:160px;font-size:13px"><span style="font-family:var(--font-heading)">' + esc(f.objetivo) + '</span> <span style="color:var(--color-neutral-500)">·</span> ' + esc(f.audiencia.nombre)
+      +   (f.audiencia.manual ? ' <span class="tag tag-outline" style="font-size:10px">a mano</span>' : '')
+      + '</div>'
+      + '<input type="range" min="0" max="100" step="1" value="' + Math.round(f.pct) + '" ' + (fijo ? 'disabled ' : '') + 'data-action="pd2-cruce-slider" ' + datos + ' style="width:180px;flex:none;accent-color:' + colorIn + (fijo ? ';opacity:.4' : '') + '">'
+      + '<input type="number" min="0" max="100" step="1" value="' + Math.round(f.pct) + '" ' + (fijo ? 'disabled ' : '') + 'data-action="pd2-cruce-slider" ' + datos + ' title="Porcentaje del total" style="width:60px;padding:4px 6px;text-align:right;border:1px solid var(--color-divider);border-radius:4px;background:var(--color-surface, #fff);color:inherit;font-family:var(--font-heading);font-size:13px;flex:none' + (fijo ? ';opacity:.6' : '') + '">'
+      + '<span style="width:14px;flex:none;font-size:12px;color:var(--color-neutral-500)">%</span>'
+      + '<button type="button" title="' + (f.bloqueada ? 'Desbloquear — vuelve a moverse con el resto' : 'Bloquear en ' + Math.round(f.pct) + '% mientras se mueven las demás') + '" ' + (f.excluida ? 'disabled ' : '') + 'data-action="pd2-cruce-bloquear" ' + datos + ' style="cursor:pointer;border:1px solid ' + (f.bloqueada ? 'var(--color-accent)' : 'var(--color-divider)') + ';background:' + (f.bloqueada ? 'var(--color-accent)' : 'transparent') + ';color:' + (f.bloqueada ? '#fff' : 'var(--color-neutral-500)') + ';font-size:14px;width:30px;height:28px;border-radius:4px;flex:none"><i class="ph ph-' + (f.bloqueada ? 'lock-simple' : 'lock-simple-open') + '"></i></button>'
+      + '<button type="button" title="Todo el presupuesto a este cruce" ' + (f.excluida || activas.length <= 1 ? 'disabled ' : '') + 'data-action="pd2-cruce-todo" ' + datos + ' style="cursor:pointer;border:1px solid var(--color-divider);background:transparent;color:var(--color-neutral-400);font-size:11px;padding:5px 8px;border-radius:4px;flex:none">Todo acá</button>'
+      + '</div>';
+  }).join('');
 
-  const flojas = filas.reduce((acc, f) => acc + f.audiencias.filter((a) => (
-    !a.manual && !a.excluida && f.activo && minPorConjunto && a.pctTotal > 0 && montoDe(a.pctTotal) < minPorConjunto
-  )).length, 0);
+  const sugerido = state.pd2RepartoSugerido && state.pd2RepartoSugerido.codigo
+    ? '<div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px"><i class="ph ph-clock-counter-clockwise"></i> Reparto predefinido: igual al último pedido con este mismo cruce (' + esc(state.pd2RepartoSugerido.codigo) + (state.pd2RepartoSugerido.fecha ? ', ' + esc(state.pd2RepartoSugerido.fecha) : '') + '). Podés cambiarlo.</div>'
+    : '';
 
   wrap.hidden = false;
   wrap.innerHTML = '<div class="field" style="margin-top:12px">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-    +   '<label style="margin:0">Distribución de la inversión <span style="font-weight:400;color:var(--color-neutral-500)">(escribí el % de cada Objetivo, y dentro de cada uno el % de cada Audiencia — el resto se acomoda solo)</span></label>'
+    +   '<label style="margin:0">Distribución de la inversión <span style="font-weight:400;color:var(--color-neutral-500)">(% del total para cada cruce Objetivo × Audiencia — el resto se acomoda solo; el candado fija una línea)</span></label>'
     +   '<button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px" data-action="pd2-reparto-parejo"><i class="ph ph-equals"></i> Repartir parejo</button>'
     + '</div>'
-    + bloques
-    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:13px;font-family:var(--font-heading)">'
-    +   '<span style="color:var(--color-accent-300)">Total: 100%</span>'
-    +   (presupuesto ? '<span>' + esc(fmtMoney(presupuesto)) + '</span>' : '<span style="color:var(--color-neutral-500)">Presupuesto: se calcula al confirmar</span>')
+    + sugerido
+    + barra
+    + '<div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);overflow:hidden">'
+    +   '<div style="display:flex;justify-content:space-between;padding:6px 10px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-500)"><span>Cruce Objetivo × Audiencia</span><span>% del total · bloquear · todo acá</span></div>'
+    +   lineas
     + '</div>'
-    + (flojas ? '<div style="font-size:12px;color:var(--color-neutral-300);margin-top:8px;padding:8px 10px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md)"><strong>' + flojas + ' conjunto(s) bajo el mínimo de Meta.</strong> Para ' + dias + ' día(s) Meta pide más de ' + esc(fmtMoney(minPorConjunto)) + ' por conjunto: si lo pedís así, va a rechazar esos.</div>' : '')
+    + '<div style="margin-top:8px;font-size:13px;font-family:var(--font-heading);color:var(--color-accent-300)">Total: 100%' + (activas.length !== filas.length ? ' <span style="color:var(--color-neutral-500);font-weight:400">(' + (filas.length - activas.length) + ' cruce(s) desactivado(s))</span>' : '') + '</div>'
     + '</div>';
 }
 
@@ -4902,9 +4883,10 @@ function resetPedidoAnunciosV2() {
   state.pd2AudienciaCodigo = '';
   state.pd2Refuerzo = [];
   state.pd2CombosExcluidos = {};
-  state.pd2RepartoObjetivo = null;
-  state.pd2RepartoAud = {};
+  state.pd2Reparto = null;
+  state.pd2RepartoBloqueados = {};
   state.pd2RepartoFirma = null;
+  state.pd2RepartoSugerido = null;
   state.pd2PresupuestoPreview = null;
   state.pd2Visibilidad = 'DARK';
   state.pd2Redes = ['facebook', 'instagram'];
@@ -5797,8 +5779,30 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (action === 'pd2-reparto-parejo') {
-    state.pd2RepartoFirma = null;
-    asegurarRepartoPd2();
+    const claves = combosRepartoPd2().map((c) => c.clave);
+    state.pd2Reparto = normalizar100({}, claves);
+    state.pd2RepartoBloqueados = {};
+    state.pd2CombosExcluidos = {};
+    state.pd2RepartoSugerido = null;
+    renderCrucesV2();
+    return;
+  }
+  if (action === 'pd2-cruce-bloquear') {
+    const clave = el.dataset.clave;
+    const bloq = Object.assign({}, state.pd2RepartoBloqueados || {});
+    if (bloq[clave]) delete bloq[clave]; else bloq[clave] = true;
+    state.pd2RepartoBloqueados = bloq;
+    renderCrucesV2();
+    return;
+  }
+  if (action === 'pd2-cruce-todo') {
+    const clave = el.dataset.clave;
+    const filas = repartoResueltoPd2();
+    const activas = filas.filter((f) => !f.excluida).map((f) => f.clave);
+    const nuevo = {};
+    activas.forEach((k) => { nuevo[k] = k === clave ? 100 : 0; });
+    state.pd2Reparto = nuevo;
+    state.pd2RepartoBloqueados = {};
     renderCrucesV2();
     return;
   }
@@ -5953,32 +5957,29 @@ document.addEventListener('change', (e) => {
   // mueve el % del total, el de Audiencia mueve el % DENTRO de ese objetivo.
   // Se maneja en 'change' (o sea al soltar) a propósito: re-renderizar en
   // 'input' cortaría el arrastre del slider.
-  if (e.target.dataset.action === 'pd2-obj-slider') {
-    const auds = audienciasDelPd2();
-    const activos = leerCheckboxes('pd2-objetivo-chk').filter((o) => auds.some((a) => !state.pd2CombosExcluidos[o + '|' + a.codigo]));
-    state.pd2RepartoObjetivo = moverPeso(state.pd2RepartoObjetivo || {}, activos, e.target.dataset.objetivo, Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)));
-    renderCrucesV2();
-    return;
-  }
-  if (e.target.dataset.action === 'pd2-aud-slider') {
-    const obj = e.target.dataset.objetivo;
-    const activas = audienciasDelPd2().filter((a) => !state.pd2CombosExcluidos[obj + '|' + a.codigo]).map((a) => a.codigo);
-    state.pd2RepartoAud = Object.assign({}, state.pd2RepartoAud);
-    state.pd2RepartoAud[obj] = moverPeso((state.pd2RepartoAud || {})[obj] || {}, activas, e.target.dataset.aud, Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)));
+  if (e.target.dataset.action === 'pd2-cruce-slider') {
+    const filas = repartoResueltoPd2();
+    const activas = filas.filter((f) => !f.excluida).map((f) => f.clave);
+    const actual = {}; filas.forEach((f) => { actual[f.clave] = f.pct; });
+    state.pd2Reparto = moverPesoConBloqueos(actual, activas, state.pd2RepartoBloqueados || {}, e.target.dataset.clave, Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)));
     renderCrucesV2();
     return;
   }
   if (e.target.dataset.action === 'pd2-excluir-cruce') {
-    const clave = e.target.dataset.objetivo + '|' + e.target.dataset.aud;
+    const clave = e.target.dataset.clave;
     const excluidos = Object.assign({}, state.pd2CombosExcluidos);
     if (e.target.checked) delete excluidos[clave];
     else excluidos[clave] = true;
     // No se puede dejar el pedido sin ningún cruce: tiene que quedar al
     // menos uno para poder pedirlo.
-    const auds = audienciasDelPd2();
-    const quedaAlguno = leerCheckboxes('pd2-objetivo-chk').some((o) => auds.some((a) => !excluidos[o + '|' + a.codigo]));
+    const quedaAlguno = combosRepartoPd2().some((c) => !excluidos[c.clave]);
     if (!quedaAlguno) { e.target.checked = true; return; }
     state.pd2CombosExcluidos = excluidos;
+    if (!e.target.checked) delete (state.pd2RepartoBloqueados || {})[clave];
+    // Los % vigentes se guardan tal cual: normalizar100 los vuelve a cerrar
+    // en 100 entre las activas.
+    const actual = {}; repartoResueltoPd2().forEach((f) => { actual[f.clave] = f.pct; });
+    state.pd2Reparto = actual;
     renderCrucesV2();
     return;
   }
