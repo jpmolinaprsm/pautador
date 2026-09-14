@@ -94,7 +94,11 @@ function filaAPedido(hoja, fila, ejes) {
   const eje = ejes.find((e) => limpio(e.eje).toLowerCase() === ejeNombre.toLowerCase());
   if (!eje) throw new Error(`Eje "${ejeNombre}" no existe en equiv_eje.`);
 
-  const objetivo = OBJETIVOS[limpio(fila.Objetivo).toLowerCase()];
+  // La hoja puede traer el objetivo "adornado" ("10K - Interacciones (solo
+  // facebook)", Chubut): se busca la palabra conocida adentro del texto.
+  const objetivoTexto = limpio(fila.Objetivo).toLowerCase();
+  const claveObjetivo = OBJETIVOS[objetivoTexto] ? objetivoTexto : Object.keys(OBJETIVOS).find((k) => objetivoTexto.includes(k));
+  const objetivo = claveObjetivo ? OBJETIVOS[claveObjetivo] : null;
   if (!objetivo) throw new Error(`Objetivo "${limpio(fila.Objetivo)}" no reconocido.`);
 
   const linkFb = limpio(fila['Link FB'] || fila.fb_post);

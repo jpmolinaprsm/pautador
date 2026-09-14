@@ -34,9 +34,20 @@ function leerAppSheetContenidos() {
 }
 
 // El prefijo de 6 caracteres es el que ya usa AppSheet para ese Proyecto.
-// Si el proyecto no existe ahí (uno cargado a mano que AppSheet no conoce), se deriva uno
-// que arranca con "TEST" para que quede clarísimo que no es real.
-function resolverPrefijoProyecto(nombreProyecto) {
+// Primero config_activos.codigo_proyecto (cargado por el seed de activos —
+// es lo único que existe en producción: el Excel local no viaja a
+// Railway, y sin esto TODOS los códigos salían "TEST…", visto 2026-09-14),
+// después el Excel local. Si el proyecto no está en ningún lado (uno
+// cargado a mano que AppSheet no conoce), se deriva uno que arranca con
+// "TEST" para que quede clarísimo que no es real.
+async function resolverPrefijoProyecto(nombreProyecto) {
+  try {
+    const activos = await readTable('config_activos');
+    const conCodigo = activos.find((a) => a.proyecto === nombreProyecto && /^[A-Z0-9]{6}$/.test(String(a.codigo_proyecto || '').trim()));
+    if (conCodigo) return String(conCodigo.codigo_proyecto).trim();
+  } catch (err) {
+    console.warn('[codigoGenerator] no pude leer config_activos para el prefijo:', err.message);
+  }
   const { proyectos } = leerAppSheetContenidos();
   const real = proyectos.find((p) => p.Proyecto === nombreProyecto);
   if (real && real.Codigo) return real.Codigo;
@@ -53,7 +64,7 @@ function resolverPrefijoProyecto(nombreProyecto) {
 // el pedido se inserta (ver crearPedido), y un lote de varios pedidos lo
 // ve igual porque cada uno relee cola_pautas.
 async function generarSiguienteCodigo(nombreProyecto, codigoEje, tipoCodigo) {
-  const prefijo = resolverPrefijoProyecto(nombreProyecto);
+  const prefijo = await resolverPrefijoProyecto(nombreProyecto);
   const buscado = `${prefijo}${tipoCodigo || TIPO_MVP}${codigoEje}`;
 
   let maxSeq = 0;

@@ -7,6 +7,7 @@ const { requireRol } = require('../middleware/usuarioActual');
 const { getUsuarios, serializarUsuario, crearUsuarioAdmin, actualizarUsuarioAdmin, ROLES } = require('../services/usuarios');
 const { getActivos } = require('../services/configActivos');
 const { resumenProyectos, fijarEstado } = require('../services/proyectos');
+const { estadoCuentas, armarMail, enviarResumen, smtpConfigurado } = require('../services/alertasPresupuesto');
 
 const router = express.Router();
 
@@ -74,6 +75,26 @@ router.put('/admin/proyectos/:proyecto', requireRol('administrador'), async (req
     res.json(await fijarEstado(req.params.proyecto, (req.body || {}).estado, req.usuario));
   } catch (err) {
     responderError(res, 'admin/proyectos PUT', err);
+  }
+});
+
+// GET /api/admin/presupuestos — presupuesto restante por cuenta automatizada
+// (lo mismo que va en el mail diario). POST /api/admin/presupuestos/enviar —
+// manda el mail ahora (para probar la configuración SMTP).
+router.get('/admin/presupuestos', requireRol('administrador'), async (req, res) => {
+  try {
+    const filas = await estadoCuentas();
+    res.json({ filas, mail: armarMail(filas), smtpConfigurado: smtpConfigurado() });
+  } catch (err) {
+    responderError(res, 'admin/presupuestos', err);
+  }
+});
+
+router.post('/admin/presupuestos/enviar', requireRol('administrador'), async (req, res) => {
+  try {
+    res.json(await enviarResumen());
+  } catch (err) {
+    responderError(res, 'admin/presupuestos/enviar', err);
   }
 });
 

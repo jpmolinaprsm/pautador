@@ -14,6 +14,7 @@ const authRoutes = require('./routes/auth');
 const ingestaRoutes = require('./routes/ingesta');
 const { revisarHojas } = require('./services/ingestaSheets');
 const { reintentarPendientes } = require('./services/tareasSheet');
+const { programarEnvioDiario } = require('./services/alertasPresupuesto');
 const codigosSheet = require('./services/codigosSheet');
 const storage = require('./services/storage');
 
@@ -24,7 +25,12 @@ app.use(express.json());
 // pasó en vivo: una pieza recién corregida seguía mostrando la matriz
 // vieja hasta cerrar la pestaña, aunque el server ya devolvía bien.
 app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// no-cache (no no-store): el browser revalida app.js/app.css en cada carga
+// y toma la versión nueva apenas se deploya — sin esto quedaba JS viejo
+// después de un cambio (visto 2026-09-14: canal Oficial seguía habilitado).
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  setHeaders: (res) => res.set('Cache-Control', 'no-cache'),
+}));
 // Preview de los materiales subidos a mano (ver routes/pedidos.js —
 // POST /api/material/subir). Viven al lado de Tablas/, no adentro de
 // public/, así que necesitan su propio static — solo sirve para mostrar la
@@ -81,6 +87,10 @@ app.listen(env.port, () => {
         .catch((e) => console.warn('[ingesta] falló la revisión:', e.message));
     }, env.ingestaMinutos * 60 * 1000);
   }
+
+  // Resumen diario por mail del presupuesto restante de las cuentas
+  // automatizadas (ALERTAS_MAIL_TO + SMTP_*, ver services/alertasPresupuesto.js).
+  if (env.metaMode === 'real') programarEnvioDiario();
 
   // Creatividades vencidas (CREATIVIDADES_DIAS): una pasada al arrancar y
   // después una por día. Meta ya tiene su copia de lo publicado.

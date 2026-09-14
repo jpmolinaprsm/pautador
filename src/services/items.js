@@ -171,6 +171,7 @@ async function getItemCompleto(pauta, matrizDistribucionCache, equivTipo) {
     audiencias,
     celdas,
     estado,
+    error_publicacion: pauta.error_publicacion || '',
     motivo_desestimacion: pauta.motivo_desestimacion || '',
     desestimado_por: pauta.desestimado_por || '',
     desestimado_en: pauta.desestimado_en || '',

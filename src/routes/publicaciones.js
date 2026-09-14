@@ -2,6 +2,9 @@ const express = require('express');
 const { getActivos, getActivoPorKey } = require('../services/configActivos');
 const { getPublicacionesRecientes, resolverPostDesdeLink } = require('../services/metaContent');
 const { limpiarNombreAudiencia } = require('../services/colaPautas');
+const { getCatalogoPorProyecto, usoPorProyectoCanal } = require('../services/audiencias');
+
+const MAX_AUDIENCIAS_POR_PROYECTO = 10;
 const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config/mvp');
 const { PLATAFORMAS, MODO_POR_FORMATO, categoriasPara } = require('../config/plataformas');
 const { volumenPorProyectoDesde } = require('../services/codigosSheet');
@@ -171,6 +174,10 @@ router.get('/proyectos', async (req, res) => {
           // Solo canal Informativo (CLIENTES_SOLO_INFORMATIVO, ej. Córdoba): la
           // pantalla de Canal apaga "Oficial" con la leyenda.
           soloInformativo: env.clientesSoloInformativo.includes(clientePor[p] || ''),
+          // Tiene al menos un activo con automatización (credenciales de
+          // Meta): sin esto no se puede elegir "Pedido Automatizado".
+          automatizable: activos.some((a) => a.proyecto === p && a.activo_habilitado === true),
+          activosAutomatizables: activos.filter((a) => a.proyecto === p && a.activo_habilitado === true).map((a) => a.activo || a.activo_key).sort((x, y) => x.localeCompare(y, 'es')),
         }))
         .sort((a, b) => b.volumen15 - a.volumen15 || a.proyecto.localeCompare(b.proyecto, 'es')));
     }
@@ -234,7 +241,9 @@ router.get('/tipos', async (req, res) => {
       // "0 – Automatización" no se elige a mano: es el Tipo de las pautas que
       // llegan solas desde las hojas salida_manual_* (Noticia Franca, El
       // Norte Ahora, Valle 24). La ingesta lo usa directo, sin pasar por acá.
-      .filter((t) => String(t.codigo) !== '0');
+      // "Y – Pautas Army" tampoco (usuario, 2026-09-14): queda en la tabla
+      // solo para el histórico.
+      .filter((t) => String(t.codigo) !== '0' && String(t.codigo) !== 'Y');
     // Los Tipos Oficiales se llaman por la letra (A/B/C) en la tabla — para
     // el desplegable se muestran "B - Media" (letra - intensidad, pedido del
     // usuario 2026-09-12); lo que se escribe en Tareas no cambia.
@@ -341,12 +350,42 @@ router.get('/audiencias', async (req, res) => {
   try {
     const todas = await readTable('equiv_audiencia');
     const del_activo = todas.filter((a) => a.activo_key === req.query.activo_key);
-    // Orden alfabético (antes salían en orden de carga).
-    res.json(del_activo.map((a) => ({
+    const lista = del_activo.map((a) => ({
       codigo: a.codigo_audiencia,
       nombre: limpiarNombreAudiencia(a.nombre_display),
       tamano: a['tamaño'] || '',
-    })).sort((x, y) => x.nombre.localeCompare(y.nombre, 'es')));
+      manual: false,
+      usos: 0,
+    }));
+    // Pedido Manual: además del activo, el catálogo del Proyecto × Canal
+    // (Excel "IDs de Auds x Activos", nombres del Excel "Audiencias") — esas
+    // piezas salen a mano. Primero las que ya se usaron en ese proyecto y
+    // canal (hoja CodigosContenido), después el resto por nombre.
+    if (req.modoActivo !== 'automatizado' && req.query.activo_key) {
+      const activo = await getActivoPorKey(req.query.activo_key);
+      const canal = req.ecosistemaActivo === 'Oficial' || req.ecosistemaActivo === 'Informativo' ? req.ecosistemaActivo : null;
+      if (activo) {
+        const vistos = new Set(lista.map((a) => a.codigo));
+        (await getCatalogoPorProyecto(activo.proyecto, canal)).forEach((f) => {
+          if (vistos.has(f.codigo)) return;
+          vistos.add(f.codigo);
+          lista.push({ codigo: f.codigo, nombre: f.nombre, tamano: f.tamano || '', manual: true, usos: 0 });
+        });
+        // Pedido Manual (usuario, 2026-09-14): solo las más usadas en los
+        // últimos dos meses en ese Proyecto × Canal, hasta 10 — si hay menos
+        // con uso, son menos (el resto se pide con "Otra").
+        const desde = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+        const uso = await usoPorProyectoCanal(activo.proyecto, canal, desde);
+        lista.forEach((a) => { a.usos = uso[String(a.codigo).toUpperCase()] || 0; });
+        const usadas = lista.filter((a) => a.usos > 0);
+        lista.length = 0;
+        lista.push(...usadas);
+        lista.sort((x, y) => (y.usos - x.usos) || x.nombre.localeCompare(y.nombre, 'es'));
+        lista.splice(MAX_AUDIENCIAS_POR_PROYECTO);
+      }
+    }
+    lista.sort((x, y) => (y.usos - x.usos) || x.nombre.localeCompare(y.nombre, 'es'));
+    res.json(lista);
   } catch (err) {
     console.error('[audiencias]', err.message);
     res.status(500).json({ error: 'No se pudo leer equiv_audiencia', detalle: err.message });

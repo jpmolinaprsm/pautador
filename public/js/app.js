@@ -883,6 +883,7 @@ function buildVM(item) {
   // tiene ESTA pieza, más "Bulk (N)" si vino junto con otras piezas en la
   // misma tanda (Módulo 5, "Cantidad de piezas" > 1 — ver enviarBulkV2).
   const tags = [];
+  if (item.error_publicacion && !isConfirmed && !isManualDone && !isDesestimada) tags.push({ label: 'Error al publicar', clase: 'tag tag-outline', estilo: 'border-color:var(--color-error, #c0392b);color:var(--color-error, #c0392b)' });
   if (celdasAuto.length) tags.push({ label: `${celdasAuto.length} conjunto${celdasAuto.length > 1 ? 's' : ''}`, clase: 'tag tag-accent' });
   if (hayManual) tags.push({ label: 'A mano', clase: 'tag tag-outline' });
   if (item.bulk_id) {
@@ -974,6 +975,7 @@ function buildVM(item) {
     isConfirmed, isManualDone, isPendienteManual, isDesestimada, isDevueltaPm,
     puedeEditarPauta: (isDevueltaPm || (!isConfirmed && !isManualDone && !isDesestimada)) && puedeEditarCampos(),
     motivoDesestimacion: item.motivo_desestimacion || '',
+    errorPublicacion: item.error_publicacion || '',
     desestimadoPor: item.desestimado_por || '',
     desestimadoEn: (item.desestimado_en || '').slice(0, 10),
     audienciaOtraTexto: isManualOnly ? (item.audiencias[0] ? item.audiencias[0].nombre : '') : ((item.audiencias.find((a) => a.manual) || {}).nombre || ''),
@@ -1050,7 +1052,7 @@ function renderRowLine(vm, columnsCss, isHistorial) {
     : `<div data-action="stop-prop">${vm.selectable ? `<input type="checkbox" ${vm.isSelected ? 'checked' : ''} data-action="toggle-select" data-id="${vm.id}" style="width:16px;height:16px;accent-color:var(--color-accent)">` : ''}</div>`;
   const estadoOrTipo = isHistorial
     ? `<span class="tag tag-neutral">${esc(vm.estadoLabel)}</span>`
-    : `<div style="display:flex;flex-wrap:wrap;gap:4px">${vm.tags.map((t) => `<span class="${t.clase}">${esc(t.label)}</span>`).join('')}</div>`;
+    : `<div style="display:flex;flex-wrap:wrap;gap:4px">${vm.tags.map((t) => `<span class="${t.clase}"${t.estilo ? ` style="${t.estilo}"` : ''}>${esc(t.label)}</span>`).join('')}</div>`;
   const chevronCell = isHistorial ? '' : `<div style="text-align:center"><i class="${vm.chevronClass}"></i></div>`;
 
   return `
@@ -1456,7 +1458,16 @@ function renderExpandContent(vm) {
   // suelto arriba del todo y desconectado de por qué era ese monto.
   const previewCols = mockPostsArr.map((p) => `<div style="width:260px;flex:none">${p}</div>`).join('');
   const columnaPresupuesto = renderColumnaPresupuesto(vm, editorPresupuesto);
-  const grid = `<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">${previewCols}${columnaPresupuesto}<div style="flex:1;min-width:420px">${body}</div></div>`;
+  // Falló la publicación en Meta (o un paso previo) en el último intento:
+  // el motivo va arriba de todo, antes del reparto, para que se vea sin
+  // buscarlo — la pieza sigue pendiente y se puede volver a pedir.
+  const avisoError = vm.errorPublicacion && !vm.isConfirmed && !vm.isManualDone && !vm.isDesestimada
+    ? '<div style="border:1px solid var(--color-error, #c0392b);border-radius:var(--radius-md);padding:10px 14px;margin-bottom:12px;font-size:13px">'
+      + '<div style="font-family:var(--font-heading);color:var(--color-error, #c0392b);margin-bottom:4px">No se pudo publicar en Meta</div>'
+      + '<div style="color:var(--color-neutral-300)">' + esc(vm.errorPublicacion) + '</div>'
+      + '</div>'
+    : '';
+  const grid = avisoError + `<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">${previewCols}${columnaPresupuesto}<div style="flex:1;min-width:420px">${body}</div></div>`;
   return `<div class="expand-panel">${header}${desestimarPanel}${grid}</div>`;
 }
 
@@ -1527,7 +1538,7 @@ function renderEditarModal() {
   // distinto al que se eligió al entrar).
   const audOpts = '<option value="">— elegir —</option>'
     + (state.pdAudiencias || []).map((a) => '<option value="' + esc(a.codigo) + '" ' + (a.codigo === c.audienciaCodigo ? 'selected' : '') + '>' + esc(a.nombre) + '</option>').join('')
-    + (state.modoActivo === 'automatizado' ? '' : '<option value="Otra" ' + (c.audienciaCodigo === 'Otra' ? 'selected' : '') + '>Otra (audiencia no guardada)</option>');
+    + (state.modoActivo === 'automatizado' ? '' : '<option value="Otra" ' + (c.audienciaCodigo === 'Otra' ? 'selected' : '') + '>Otra</option>');
   const esPublico = c.visibilidad === 'PUBLICO';
   const preview = c.imagenPreview
     ? '<img src="' + esc(c.imagenPreview) + '" data-action="abrir-lightbox" data-url="' + esc(c.imagenPreview) + '" style="width:120px;height:120px;object-fit:cover;border-radius:var(--radius-md);cursor:zoom-in;flex:none" title="Ver más grande">'
@@ -1903,15 +1914,17 @@ function renderDropdownMulti(id, claseChk, opciones, placeholder, seleccionados)
 // Sin "Otra" (audiencia manual) — recorte a MVP, ver src/config/mvp.js.
 // "Otra" (audiencia manual) solo se ofrece en modo "normal" — en
 // "automatizado" está bloqueada (ver validación en pedidos.js).
+// Pedido Manual: las 20 más usadas del Proyecto × Canal (ya vienen
+// ordenadas del server) y "Otra" para escribir cuál es.
 function renderAudienciaSelect(id, audiencias, seleccionado) {
   const opts = audiencias.map((a) => `<option value="${esc(a.codigo)}" ${a.codigo === seleccionado ? 'selected' : ''}>${esc(a.nombre)}</option>`).join('');
-  const otra = state.modoActivo === 'automatizado' ? '' : `<option value="Otra" ${seleccionado === 'Otra' ? 'selected' : ''}>Otra (audiencia no guardada)</option>`;
+  const otra = state.modoActivo === 'automatizado' ? '' : `<option value="Otra" ${seleccionado === 'Otra' ? 'selected' : ''}>Otra</option>`;
   return `<select class="input" id="${id}"><option value="">— elegir —</option>${opts}${otra}</select>`;
 }
 
 function renderRefuerzoDropdown(prefix, audiencias, seleccionados) {
   const opciones = audiencias.map((a) => [a.codigo, a.nombre]);
-  if (state.modoActivo !== 'automatizado') opciones.push(['Otra', 'Otra (audiencia no guardada)']);
+  if (state.modoActivo !== 'automatizado') opciones.push(['Otra', 'Otra']);
   return renderDropdownMulti(`${prefix}-refuerzo-dd`, `${prefix}-refuerzo-chk`, opciones, '— opcional, uno o más —', seleccionados);
 }
 
@@ -1922,6 +1935,9 @@ function renderRefuerzoDropdown(prefix, audiencias, seleccionados) {
 // Nunca puede quedar sin ninguna red elegida (el pedido no sabría dónde
 // publicar) — cuando queda una sola tildada, esa se bloquea para que no se
 // pueda destildar también.
+// Instagram se ofrece siempre: sin cuenta de IG conectada, Meta publica
+// igual con la identidad de la Página (verificado 2026-09-14 con Gaceta
+// Santafesina) — el creative simplemente no lleva instagram_user_id.
 function renderRedesCheckboxes(seleccionadas, bloqueadoPorPost, claseChk) {
   const clase = claseChk || 'pd-red-chk';
   const opciones = [['facebook', 'Facebook'], ['instagram', 'Instagram']];
@@ -3348,12 +3364,6 @@ async function actualizarPresupuestoPreviewPd2() {
   renderCrucesV2();
 }
 
-function sliderReparto(accion, datos, valor, deshabilitado) {
-  return '<input type="range" min="0" max="100" step="1" value="' + Math.round(valor) + '" ' + (deshabilitado ? 'disabled ' : '')
-    + 'data-action="' + accion + '" ' + datos
-    + ' style="flex:1;min-width:90px;accent-color:var(--color-accent)' + (deshabilitado ? ';opacity:.4' : '') + '">';
-}
-
 function renderCrucesV2() {
   const wrap = document.getElementById('pd2-cruces-wrap');
   if (!wrap) return;
@@ -3377,36 +3387,62 @@ function renderCrucesV2() {
   const minPorConjunto = minDiario ? minDiario * dias : 0;
   const montoDe = (pct) => Math.round((presupuesto * pct) / 100);
 
-  const bloques = filas.map((f) => {
-    const audHtml = f.audiencias.map((a) => {
+  // Un color por Objetivo: lo comparten la barra de arriba y el punto de
+  // cada fila, así se lee de un vistazo cuánto se lleva cada uno.
+  const COLORES = ['var(--color-accent)', '#2a9d8f', '#e76f51', '#8d6cab', '#c9a227', '#5c7cfa'];
+  const colorDe = (i) => COLORES[i % COLORES.length];
+  const objetivosActivos = filas.filter((f) => f.activo).length;
+  const inputPct = (accion, datos, valor, deshabilitado, titulo) => '<input type="number" min="0" max="100" step="1" value="' + Math.round(valor) + '" '
+    + (deshabilitado ? 'disabled ' : '') + 'data-action="' + accion + '" ' + datos + ' title="' + esc(titulo || '') + '" '
+    + 'style="width:64px;padding:4px 6px;text-align:right;border:1px solid var(--color-divider);border-radius:4px;background:var(--color-surface, #fff);color:inherit;font-family:var(--font-heading);font-size:13px' + (deshabilitado ? ';opacity:.5;background:transparent' : '') + '">';
+  const nota = (texto) => '<span style="display:inline-block;width:178px;text-align:left;color:var(--color-neutral-500);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle">' + texto + '</span>';
+
+  // Barra apilada: un tramo por conjunto (objetivo × audiencia), del color
+  // del objetivo, con el ancho de su % del total.
+  const tramos = [];
+  filas.forEach((f, i) => {
+    if (!f.activo) return;
+    f.audiencias.forEach((a, j) => {
+      if (a.excluida || !(a.pctTotal > 0)) return;
+      tramos.push('<div title="' + esc(f.objetivo + ' · ' + a.nombre + ': ' + a.pctTotal + '%') + '" style="width:' + a.pctTotal + '%;background:' + colorDe(i) + ';opacity:' + (j % 2 ? '.72' : '1') + ';border-right:1px solid var(--color-surface, #fff)"></div>');
+    });
+  });
+  const barra = '<div style="display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--color-divider);margin-bottom:10px">' + tramos.join('') + '</div>';
+
+  const celda = (contenido, estilo) => '<td style="padding:7px 8px;border-top:1px solid var(--color-divider);vertical-align:middle;' + (estilo || '') + '">' + contenido + '</td>';
+  const filasHtml = [];
+  filas.forEach((f, i) => {
+    const activasEnObjetivo = f.audiencias.filter((a) => !a.excluida).length;
+    filasHtml.push('<tr style="background:var(--color-surface-2, rgba(127,127,127,.06))' + (f.activo ? '' : ';opacity:.5') + '">'
+      + celda('<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + colorDe(i) + ';margin-right:8px;vertical-align:middle"></span><span style="font-family:var(--font-heading);font-size:14px">' + esc(f.objetivo) + '</span>')
+      + celda(inputPct('pd2-obj-slider', 'data-objetivo="' + esc(f.objetivo) + '"', f.pct, !f.activo || objetivosActivos <= 1, 'Porcentaje del total para ' + f.objetivo) + ' ' + nota('% del total'), 'white-space:nowrap;text-align:right')
+      + celda(presupuesto ? '<span style="font-family:var(--font-heading)">' + esc(fmtMoney(montoDe(f.pct))) + '</span>' : '', 'text-align:right;white-space:nowrap')
+      + '</tr>');
+    f.audiencias.forEach((a) => {
       const monto = montoDe(a.pctTotal);
       const bajoMinimo = !a.manual && !a.excluida && minPorConjunto && a.pctTotal > 0 && monto < minPorConjunto;
       const datos = 'data-objetivo="' + esc(f.objetivo) + '" data-aud="' + esc(a.codigo) + '"';
-      return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0' + (a.excluida ? ';opacity:.45' : '') + '">'
-        + '<input type="checkbox" ' + (a.excluida ? '' : 'checked') + ' title="Incluir este conjunto" data-action="pd2-excluir-cruce" ' + datos + ' style="width:15px;height:15px;accent-color:var(--color-accent);flex:none">'
-        + '<div class="row-ellip" style="width:180px;flex:none;font-size:12px;color:var(--color-neutral-400)">' + esc(a.nombre)
-        +   (a.manual ? ' <span class="tag tag-outline" style="font-size:10px">a mano</span>' : '')
-        + '</div>'
-        + sliderReparto('pd2-aud-slider', datos, a.pctEnObjetivo, a.excluida || !f.activo)
-        + '<div style="width:118px;flex:none;text-align:right">'
-        +   '<div style="font-family:var(--font-heading);font-size:13px">' + a.pctEnObjetivo + '% <span style="color:var(--color-neutral-500);font-size:11px">(' + a.pctTotal + '% del total)</span></div>'
-        +   (presupuesto ? '<div style="font-size:11px;color:' + (bajoMinimo ? 'var(--color-warning, #d08a1e)' : 'var(--color-neutral-500)') + '">' + esc(fmtMoney(monto)) + '</div>' : '')
-        + '</div>'
-        + '</div>';
-    }).join('');
-
-    return '<div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:12px 14px' + (f.activo ? '' : ';opacity:.5') + '">'
-      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">'
-      +   '<div style="width:195px;flex:none;font-family:var(--font-heading);font-size:14px">' + esc(f.objetivo) + '</div>'
-      +   sliderReparto('pd2-obj-slider', 'data-objetivo="' + esc(f.objetivo) + '"', f.pct, !f.activo)
-      +   '<div style="width:118px;flex:none;text-align:right">'
-      +     '<div style="font-family:var(--font-heading);font-size:16px">' + f.pct + '%</div>'
-      +     (presupuesto ? '<div style="font-size:11px;color:var(--color-neutral-500)">' + esc(fmtMoney(montoDe(f.pct))) + '</div>' : '')
-      +   '</div>'
-      + '</div>'
-      + '<div style="border-top:1px solid var(--color-divider);padding-top:4px;margin-left:12px">' + audHtml + '</div>'
-      + '</div>';
-  }).join('');
+      filasHtml.push('<tr' + (a.excluida ? ' style="opacity:.45"' : '') + '>'
+        + celda('<label style="display:flex;align-items:center;gap:8px;padding-left:22px;cursor:pointer">'
+          + '<input type="checkbox" ' + (a.excluida ? '' : 'checked') + ' title="Incluir este conjunto" data-action="pd2-excluir-cruce" ' + datos + ' style="width:15px;height:15px;accent-color:var(--color-accent);flex:none">'
+          + '<span style="font-size:13px">' + esc(a.nombre) + '</span>'
+          + (a.manual ? '<span class="tag tag-outline" style="font-size:10px">a mano</span>' : '')
+          + '</label>')
+        + celda('<input type="range" min="0" max="100" step="1" value="' + Math.round(a.pctEnObjetivo) + '" ' + (a.excluida || !f.activo || activasEnObjetivo <= 1 ? 'disabled ' : '') + 'data-action="pd2-aud-slider" ' + datos + ' style="width:150px;vertical-align:middle;margin-right:8px;accent-color:' + colorDe(i) + (a.excluida || !f.activo || activasEnObjetivo <= 1 ? ';opacity:.4' : '') + '">'
+          + inputPct('pd2-aud-slider', datos, a.pctEnObjetivo, a.excluida || !f.activo || activasEnObjetivo <= 1, 'Porcentaje de ' + f.objetivo + ' para ' + a.nombre)
+          + ' ' + nota('% de ' + esc(f.objetivo) + ' · ' + a.pctTotal + '% del total'), 'white-space:nowrap;text-align:right')
+        + celda(presupuesto ? '<span style="color:' + (bajoMinimo ? 'var(--color-warning, #d08a1e)' : 'inherit') + '"' + (bajoMinimo ? ' title="Bajo el mínimo de Meta para estos días"' : '') + '>' + esc(fmtMoney(monto)) + (bajoMinimo ? ' <i class="ph ph-warning"></i>' : '') + '</span>' : '', 'text-align:right;white-space:nowrap')
+        + '</tr>');
+    });
+  });
+  const tabla = '<div style="overflow-x:auto;border:1px solid var(--color-divider);border-radius:var(--radius-md)">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:13px">'
+    + '<thead><tr style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-500)">'
+    +   '<th style="text-align:left;padding:8px 8px;font-weight:500">Conjunto de anuncios</th>'
+    +   '<th style="text-align:right;padding:8px 8px;font-weight:500">Reparto</th>'
+    +   '<th style="text-align:right;padding:8px 8px;font-weight:500">' + (presupuesto ? 'Importe' : '') + '</th>'
+    + '</tr></thead><tbody>' + filasHtml.join('') + '</tbody></table></div>';
+  const bloques = barra + tabla;
 
   const flojas = filas.reduce((acc, f) => acc + f.audiencias.filter((a) => (
     !a.manual && !a.excluida && f.activo && minPorConjunto && a.pctTotal > 0 && montoDe(a.pctTotal) < minPorConjunto
@@ -3415,10 +3451,10 @@ function renderCrucesV2() {
   wrap.hidden = false;
   wrap.innerHTML = '<div class="field" style="margin-top:12px">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-    +   '<label style="margin:0">Distribución de la inversión <span style="font-weight:400;color:var(--color-neutral-500)">(% por Objetivo, y dentro de cada uno, % por Audiencia)</span></label>'
+    +   '<label style="margin:0">Distribución de la inversión <span style="font-weight:400;color:var(--color-neutral-500)">(escribí el % de cada Objetivo, y dentro de cada uno el % de cada Audiencia — el resto se acomoda solo)</span></label>'
     +   '<button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px" data-action="pd2-reparto-parejo"><i class="ph ph-equals"></i> Repartir parejo</button>'
     + '</div>'
-    + '<div style="display:flex;flex-direction:column;gap:10px">' + bloques + '</div>'
+    + bloques
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:13px;font-family:var(--font-heading)">'
     +   '<span style="color:var(--color-accent-300)">Total: 100%</span>'
     +   (presupuesto ? '<span>' + esc(fmtMoney(presupuesto)) + '</span>' : '<span style="color:var(--color-neutral-500)">Presupuesto: se calcula al confirmar</span>')
@@ -5075,7 +5111,7 @@ const ECOSISTEMAS_VALIDOS = ['Oficial', 'Informativo'];
 const MODO_COPY = {
   automatizado: {
     titulo: 'Pedido Automatizado',
-    detalle: 'Meta, intensidad Media o Baja, objetivo Alcance o Interacción — se publica solo (en pausa), sin revisión previa.',
+    detalle: 'Solo canal Informativo. Meta, intensidad Media o Baja, objetivo Alcance o Interacción — se publica solo (en pausa), sin revisión previa.',
   },
   normal: {
     titulo: 'Pedido Manual',
@@ -5096,6 +5132,33 @@ function proyectoSoloInformativo(proyecto) {
 }
 const LEYENDA_SOLO_INFORMATIVO = 'Por ahora solo canal Informativo — el canal Oficial va a tener su propio módulo.';
 
+// Tiene al menos un activo con automatización (lo dice /api/proyectos?detalle=1).
+// Sin eso no se puede elegir "Pedido Automatizado" (usuario, 2026-09-14).
+function proyectoAutomatizable(proyecto) {
+  // Sin el detalle cargado todavía (recarga con proyecto guardado) no se
+  // bloquea: se decide cuando llega.
+  if (!state.proyectosDetalle || !state.proyectosDetalle.length) return true;
+  const p = state.proyectosDetalle.find((d) => d.proyecto === (proyecto || state.proyectoActivo));
+  return !!(p && p.automatizable);
+}
+const LEYENDA_SIN_AUTOMATIZACION = 'Este proyecto no tiene activos con automatización — solo Pedido Manual.';
+function activosAutomatizablesDe(proyecto) {
+  const p = (state.proyectosDetalle || []).find((d) => d.proyecto === (proyecto || state.proyectoActivo));
+  return (p && p.activosAutomatizables) || [];
+}
+// Recarga con un proyecto ya guardado: el detalle (automatización, solo
+// Informativo) todavía no está — se pide y se vuelve a dibujar la pantalla.
+function asegurarProyectosDetalle(volverADibujar) {
+  if (state.proyectosDetalle && state.proyectosDetalle.length) return;
+  if (state.proyectosDetalleCargando) return;
+  state.proyectosDetalleCargando = true;
+  apiFetch('/api/proyectos?detalle=1').then(async (r) => {
+    state.proyectosDetalle = r.ok ? await r.json() : [];
+    state.proyectosDetalleCargando = false;
+    render();
+  }).catch(() => { state.proyectosDetalleCargando = false; });
+}
+
 // Qué pantalla corresponde mostrar AHORA MISMO, según lo que ya se eligió y
 // si sigue siendo válido para el usuario actual (cambiar de usuario en el
 // selector del nav puede invalidar un Proyecto que el nuevo usuario no
@@ -5111,9 +5174,9 @@ function pantallaActual() {
   if (!proyectoValido) return 'proyecto';
   const modoValido = state.modoActivo === 'TODOS'
     ? esAdmin()
-    : MODOS_VALIDOS.includes(state.modoActivo);
+    : (MODOS_VALIDOS.includes(state.modoActivo) && !(state.modoActivo === 'automatizado' && !proyectoAutomatizable()));
   if (!modoValido) return 'modo';
-  // Ecosistema (Oficial/Informativo) se pregunta en los dos modos — salvo en
+  // Canal (Oficial/Informativo) se pregunta en los dos modos — salvo en
   // un proyecto "solo Informativo" (ej. Córdoba): ahí ni se pregunta, queda
   // Informativo fijo (el aviso está en la tarjeta del proyecto).
   if (proyectoSoloInformativo()) {
@@ -5123,9 +5186,12 @@ function pantallaActual() {
     }
     return 'app';
   }
-  const ecosistemaValido = state.ecosistemaActivo === 'TODOS'
-    ? esAdmin()
-    : ECOSISTEMAS_VALIDOS.includes(state.ecosistemaActivo);
+  // Pedido Automatizado es solo canal Informativo (usuario, 2026-09-14): la
+  // pantalla se muestra igual, con Oficial inhabilitado — un "Oficial" o
+  // "Ver ambos" guardado de otra sesión manda a elegir de nuevo.
+  const ecosistemaValido = state.modoActivo === 'automatizado'
+    ? state.ecosistemaActivo === 'Informativo'
+    : (state.ecosistemaActivo === 'TODOS' ? esAdmin() : ECOSISTEMAS_VALIDOS.includes(state.ecosistemaActivo));
   if (!ecosistemaValido) return 'ecosistema';
   return 'app';
 }
@@ -5271,6 +5337,7 @@ function toggleModo() {
   }
   const otro = state.modoActivo === 'automatizado' ? 'normal' : 'automatizado';
   if (!MODOS_HABILITADOS.includes(otro)) return; // botón ya se muestra disabled
+  if (otro === 'automatizado' && !proyectoAutomatizable()) return;
   elegirModo(otro);
 }
 
@@ -5355,7 +5422,10 @@ function renderPantallaProyecto() {
     // Proyecto solo Informativo (Córdoba): el aviso va acá mismo, en la
     // tarjeta — después no se pregunta el canal.
     const soloInf = proyectoSoloInformativo(p);
-    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-proyecto" data-id="' + esc(p) + '" ' + (soloInf ? 'title="' + esc(LEYENDA_SOLO_INFORMATIVO) + '"' : '') + '>'
+    const automatizable = proyectoAutomatizable(p);
+    // Con automatización: solo el recuadro en verde (usuario, 2026-09-14).
+    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-proyecto" data-id="' + esc(p) + '" ' + (soloInf ? 'title="' + esc(LEYENDA_SOLO_INFORMATIVO) + '"' : (automatizable ? 'title="Tiene activos con automatización"' : 'title="' + esc(LEYENDA_SIN_AUTOMATIZACION) + '"'))
+      + (automatizable ? ' style="border-color:var(--color-success, #1f8a4c);box-shadow:inset 0 0 0 1px var(--color-success, #1f8a4c)"' : '') + '>'
       + '<span style="display:flex;flex-direction:column;gap:3px;min-width:0"><span class="titulo">' + esc(p) + '</span>'
       + (soloInf ? '<span class="subtitulo" style="margin:0;color:var(--color-warning, #d08a1e)"><i class="ph ph-info"></i> Solo canal Informativo por ahora</span>' : '')
       + '</span>' + badge + '</button>';
@@ -5389,15 +5459,23 @@ function renderPantallaProyecto() {
 
 function renderPantallaModo() {
   asegurarPendientesDetalle(renderPantallaModo);
+  asegurarProyectosDetalle();
   document.getElementById('pantalla-modo-contexto').textContent =
     state.proyectoActivo === 'TODOS' ? 'Todos los proyectos' : (state.proyectoActivo || '');
   const opciones = MODOS_VALIDOS.map((modo) => {
-    const habilitado = MODOS_HABILITADOS.includes(modo);
+    // "Pedido Automatizado" solo si el proyecto tiene algún activo con
+    // automatización (usuario, 2026-09-14).
+    const sinAutomatizacion = modo === 'automatizado' && !proyectoAutomatizable();
+    const habilitado = MODOS_HABILITADOS.includes(modo) && !sinAutomatizacion;
+    const motivo = sinAutomatizacion ? LEYENDA_SIN_AUTOMATIZACION : 'Todavía no está habilitado';
     const copy = MODO_COPY[modo] || { titulo: modo, detalle: '' };
-    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-modo" data-id="' + esc(modo) + '" ' + (habilitado ? '' : 'disabled title="Todavía no está habilitado"') + '>'
+    // En Automatizado se dice qué activos del proyecto pueden automatizar.
+    const activosAuto = modo === 'automatizado' && habilitado ? activosAutomatizablesDe() : [];
+    return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-modo" data-id="' + esc(modo) + '" ' + (habilitado ? '' : 'disabled title="' + esc(motivo) + '"') + '>'
       + '<span style="display:flex;flex-direction:column;gap:2px">'
       +   '<span class="titulo">' + esc(copy.titulo) + '</span>'
-      +   '<span class="subtitulo">' + esc(copy.detalle) + '</span>'
+      +   (activosAuto.length ? '<span class="subtitulo" style="margin:0;color:var(--color-success, #1f8a4c)"><i class="ph ph-lightning"></i> Activos que se automatizan: ' + esc(activosAuto.join(', ')) + '</span>' : '')
+      +   '<span class="subtitulo">' + esc(habilitado ? copy.detalle : motivo) + '</span>'
       + '</span>'
       + (habilitado ? badgePendientes(contarPendientes({ modo, ecosistema: null })) : '<span class="subtitulo" style="flex:none">Apagado</span>')
       + '</button>';
@@ -5411,14 +5489,17 @@ function renderPantallaModo() {
 // Canal (Oficial / Informativo) — se pregunta en los dos modos.
 function renderPantallaEcosistema() {
   asegurarPendientesDetalle(renderPantallaEcosistema);
+  asegurarProyectosDetalle();
   document.getElementById('pantalla-ecosistema-contexto').textContent =
     (state.proyectoActivo === 'TODOS' ? 'Todos los proyectos' : (state.proyectoActivo || ''))
     + (state.modoActivo && state.modoActivo !== 'TODOS' ? ' · ' + ((MODO_COPY[state.modoActivo] || {}).titulo || state.modoActivo) : '');
   const detalleEco = { Oficial: 'Cuentas oficiales de gobierno y funcionarios.', Informativo: 'Medios y portales informativos.' };
   const soloInf = proyectoSoloInformativo();
+  const esAutomatizado = state.modoActivo === 'automatizado';
   const opciones = ECOSISTEMAS_VALIDOS.map((eco) => {
-    const habilitado = ECOSISTEMAS_HABILITADOS.includes(eco) && !(soloInf && eco === 'Oficial');
-    const motivo = soloInf && eco === 'Oficial' ? LEYENDA_SOLO_INFORMATIVO : 'Todavía no está habilitado';
+    const habilitado = ECOSISTEMAS_HABILITADOS.includes(eco) && !((soloInf || esAutomatizado) && eco === 'Oficial');
+    const motivo = eco === 'Oficial' && soloInf ? LEYENDA_SOLO_INFORMATIVO
+      : (eco === 'Oficial' && esAutomatizado ? 'Pedido Automatizado es solo canal Informativo.' : 'Todavía no está habilitado');
     return '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-ecosistema" data-id="' + esc(eco) + '" ' + (habilitado ? '' : 'disabled title="' + esc(motivo) + '"') + '>'
       + '<span style="display:flex;flex-direction:column;gap:2px">'
       +   '<span class="titulo"><span class="eco-chip ' + (eco === 'Oficial' ? 'eco-oficial' : 'eco-informativo') + '">' + esc(eco) + '</span></span>'
@@ -5427,7 +5508,7 @@ function renderPantallaEcosistema() {
       + (habilitado ? badgePendientes(contarPendientes({ ecosistema: eco })) : '<span class="subtitulo">Apagado</span>')
       + '</button>';
   }).join('');
-  const opcionAmbos = esAdmin() && !soloInf
+  const opcionAmbos = esAdmin() && !soloInf && !esAutomatizado
     ? '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-ecosistema" data-id="TODOS" style="border-style:dashed"><span class="titulo">Ver ambos canales</span>' + badgePendientes(contarPendientes({ ecosistema: null })) + '</button>'
     : '';
   document.getElementById('pantalla-ecosistema-lista').innerHTML = opciones + opcionAmbos;
@@ -5449,10 +5530,11 @@ function renderNavContexto() {
     btnModo.title = 'Elegir un modo';
   } else {
     const otro = state.modoActivo === 'automatizado' ? 'normal' : 'automatizado';
-    const puedeIr = MODOS_HABILITADOS.includes(otro);
-    btnModo.textContent = tituloDe(state.modoActivo) + ' ▾';
+    const sinAuto = otro === 'automatizado' && !proyectoAutomatizable();
+    const puedeIr = MODOS_HABILITADOS.includes(otro) && !sinAuto;
+    btnModo.textContent = tituloDe(state.modoActivo) + (puedeIr ? ' ▾' : '');
     btnModo.disabled = !puedeIr;
-    btnModo.title = puedeIr ? ('Pasar a "' + tituloDe(otro) + '"') : (tituloDe(otro) + ' todavía no está habilitado');
+    btnModo.title = puedeIr ? ('Pasar a "' + tituloDe(otro) + '"') : (sinAuto ? LEYENDA_SIN_AUTOMATIZACION : (tituloDe(otro) + ' todavía no está habilitado'));
   }
 
   // Botón de Ecosistema: en los dos modos, con el color del ecosistema
@@ -5468,12 +5550,15 @@ function renderNavContexto() {
       btnEco.title = 'Elegir un canal';
     } else {
       const otroEco = state.ecosistemaActivo === 'Informativo' ? 'Oficial' : 'Informativo';
-      const puedeIrEco = ECOSISTEMAS_HABILITADOS.includes(otroEco) && !(otroEco === 'Oficial' && proyectoSoloInformativo());
-      btnEco.textContent = (state.ecosistemaActivo || '') + ' ▾';
+      // Pedido Automatizado es solo Informativo: el chip queda fijo, sin
+      // ofrecer "Pasar a Oficial" (pantallaActual lo forzaría igual).
+      const soloInf = proyectoSoloInformativo() || state.modoActivo === 'automatizado';
+      const puedeIrEco = ECOSISTEMAS_HABILITADOS.includes(otroEco) && !(otroEco === 'Oficial' && soloInf);
+      btnEco.textContent = (state.ecosistemaActivo || '') + (puedeIrEco ? ' ▾' : '');
       btnEco.disabled = !puedeIrEco;
       btnEco.title = puedeIrEco
         ? ('Pasar a "' + otroEco + '"')
-        : (otroEco === 'Oficial' && proyectoSoloInformativo() ? LEYENDA_SOLO_INFORMATIVO : (otroEco + ' todavía no está habilitado'));
+        : (otroEco === 'Oficial' && soloInf ? (state.modoActivo === 'automatizado' ? 'Pedido Automatizado es solo canal Informativo' : LEYENDA_SOLO_INFORMATIVO) : (otroEco + ' todavía no está habilitado'));
     }
   }
 }
@@ -5851,7 +5936,7 @@ document.addEventListener('change', (e) => {
   if (e.target.dataset.action === 'pd2-obj-slider') {
     const auds = audienciasDelPd2();
     const activos = leerCheckboxes('pd2-objetivo-chk').filter((o) => auds.some((a) => !state.pd2CombosExcluidos[o + '|' + a.codigo]));
-    state.pd2RepartoObjetivo = moverPeso(state.pd2RepartoObjetivo || {}, activos, e.target.dataset.objetivo, parseFloat(e.target.value) || 0);
+    state.pd2RepartoObjetivo = moverPeso(state.pd2RepartoObjetivo || {}, activos, e.target.dataset.objetivo, Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)));
     renderCrucesV2();
     return;
   }
@@ -5859,7 +5944,7 @@ document.addEventListener('change', (e) => {
     const obj = e.target.dataset.objetivo;
     const activas = audienciasDelPd2().filter((a) => !state.pd2CombosExcluidos[obj + '|' + a.codigo]).map((a) => a.codigo);
     state.pd2RepartoAud = Object.assign({}, state.pd2RepartoAud);
-    state.pd2RepartoAud[obj] = moverPeso((state.pd2RepartoAud || {})[obj] || {}, activas, e.target.dataset.aud, parseFloat(e.target.value) || 0);
+    state.pd2RepartoAud[obj] = moverPeso((state.pd2RepartoAud || {})[obj] || {}, activas, e.target.dataset.aud, Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)));
     renderCrucesV2();
     return;
   }

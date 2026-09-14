@@ -114,6 +114,18 @@ const env = {
   // CodigosContenido. "Empecemos con solo septiembre y después con BQ
   // ponemos todo" (usuario, 2026-09-12).
   historialDesde: process.env.HISTORIAL_DESDE || '2026-09-01',
+
+  // --- Aviso diario por mail del presupuesto restante de las cuentas
+  // automatizadas (ver services/alertasPresupuesto.js). Sin SMTP_* o sin
+  // ALERTAS_MAIL_TO no se manda nada (el cálculo sigue disponible por API).
+  smtpHost: process.env.SMTP_HOST || '',
+  smtpPort: Number(process.env.SMTP_PORT || 587),
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPass: process.env.SMTP_PASS || '',
+  smtpFrom: process.env.SMTP_FROM || '',
+  alertasMailTo: String(process.env.ALERTAS_MAIL_TO || '').split(',').map((s) => s.trim()).filter(Boolean),
+  // Hora (0-23, Argentina) a la que sale el resumen diario.
+  alertasHora: Number(process.env.ALERTAS_HORA || 9),
 };
 
 if (env.dataSource === 'google' && !env.sheetId) {

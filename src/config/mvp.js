@@ -12,9 +12,14 @@ const OBJETIVOS_PERMITIDOS = ['Alcance', 'Interacción'];
 // '0' = "Automatización": el Tipo con el que vienen codificadas las pautas
 // de las hojas salida_manual_* (ej. GDCHAC0AG00262) — entra en Automatizado
 // porque ES el flujo automático, no lo elige nadie a mano.
+// Automatizado es solo canal Informativo (usuario, 2026-09-14): los Tipos
+// Oficiales (A/B/C) no pasan. "Y – Pautas Army" tampoco se elige a mano;
+// "0 – Automatización" es de la ingesta (salida_manual_*), que no pasa por acá.
 function esTipoPermitidoAutomatizado(tipo) {
   if (!tipo) return false;
-  if (tipo.codigo === 'Y' || String(tipo.codigo) === '0') return true;
+  if (tipo.ecosistema === 'Oficial') return false;
+  if (String(tipo.codigo) === '0') return true;
+  if (tipo.codigo === 'Y') return false;
   return !tipo.monto_fijo && INTENSIDADES_PERMITIDAS.includes(tipo.intensidad);
 }
 

@@ -263,7 +263,7 @@ async function crearCreative(pauta, ctx, postIdOverride) {
       page_id: ctx.activo.page_id,
       link_data: { message: pauta.copy || '', link: linkCarrusel, child_attachments: childAttachments },
     };
-    if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpecCarrusel.instagram_actor_id = ctx.activo.ig_actor_id;
+    if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpecCarrusel.instagram_user_id = ctx.activo.ig_actor_id;
     creativePayload = { object_story_spec: objectStorySpecCarrusel };
   } else {
     // Material nuevo (Oculto/Dark): se sube el archivo y se arma el creative
@@ -368,7 +368,7 @@ async function crearCreative(pauta, ctx, postIdOverride) {
         ],
       };
       const objectStorySpecDual = { page_id: ctx.activo.page_id };
-      if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpecDual.instagram_actor_id = ctx.activo.ig_actor_id;
+      if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpecDual.instagram_user_id = ctx.activo.ig_actor_id;
       creativePayload = { object_story_spec: objectStorySpecDual, asset_feed_spec: assetFeedSpec };
     } else {
       let contenidoSpec;
@@ -390,7 +390,7 @@ async function crearCreative(pauta, ctx, postIdOverride) {
       }
 
       const objectStorySpec = { page_id: ctx.activo.page_id, ...contenidoSpec };
-      if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpec.instagram_actor_id = ctx.activo.ig_actor_id;
+      if (esIdValido(ctx.activo.ig_actor_id)) objectStorySpec.instagram_user_id = ctx.activo.ig_actor_id;
       creativePayload = { object_story_spec: objectStorySpec };
     }
   }
@@ -519,11 +519,38 @@ async function crearAdsetYAd(pauta, celda, monto, campaignId, ctx, creativeId) {
   }
   if (fin) adsetPayload.end_time = fechaISO(fin, true);
 
+  // Un público guardado puede traer intereses que Meta ya dio de baja
+  // (subcode 1870247, "Public security" → "Government"): Meta manda el
+  // reemplazo en el mismo error, así que se aplica y se reintenta una vez
+  // en vez de rechazar la pieza (visto en Afines Seguridad, 2026-09-14).
+  const reemplazosDeInteresesVencidos = (err) => {
+    const me = err.metaError || {};
+    if (me.error_subcode !== 1870247) return null;
+    const texto = [me.error_data, me.error_user_msg, me.message].map((v) => (typeof v === 'string' ? v : JSON.stringify(v || ''))).join(' ');
+    const pares = [];
+    const re = /"deprecated_interest_id"\s*:\s*"?(\d+)"?[^}]*?"alternative_interest_id"\s*:\s*"?(\d+)"?/g;
+    let m;
+    while ((m = re.exec(texto)) !== null) pares.push([m[1], m[2]]);
+    return pares.length ? pares : null;
+  };
+  const postAdset = async (payload) => {
+    try {
+      return await metaApi.graphPost(`/${ctx.activo.ad_account_id}/adsets`, payload);
+    } catch (err) {
+      const pares = reemplazosDeInteresesVencidos(err);
+      if (!pares) throw err;
+      let targetingTexto = JSON.stringify(payload.targeting);
+      pares.forEach(([viejo, nuevo]) => { targetingTexto = targetingTexto.split(`"${viejo}"`).join(`"${nuevo}"`).split(`:${viejo}`).join(`:${nuevo}`); });
+      console.warn(`[metaAdapterReal] "${nombre}": intereses dados de baja en el público guardado, reemplazados: ${pares.map(([a, b]) => `${a}→${b}`).join(', ')}`);
+      return metaApi.graphPost(`/${ctx.activo.ad_account_id}/adsets`, { ...payload, targeting: JSON.parse(targetingTexto) });
+    }
+  };
+
   let adsetId;
   try {
     // "Anuncios multianunciante" tiene que ir siempre desactivado (regla del
     // piloto de Toni) — lo intentamos acá.
-    const adset = await metaApi.graphPost(`/${ctx.activo.ad_account_id}/adsets`, {
+    const adset = await postAdset({
       ...adsetPayload,
       contextual_bundling_spec: { status: 'OPT_OUT' },
     });
@@ -535,7 +562,7 @@ async function crearAdsetYAd(pauta, celda, monto, campaignId, ctx, creativeId) {
     // no depende de nosotros) — seguimos sin poder desactivarlo y avisamos,
     // en vez de bloquear toda la pieza por esto.
     console.warn(`[metaAdapterReal] "${nombre}": la cuenta no puede controlar "multi-advertiser ads" por API — revisar a mano en Ads Manager.`);
-    const adset = await metaApi.graphPost(`/${ctx.activo.ad_account_id}/adsets`, adsetPayload);
+    const adset = await postAdset(adsetPayload);
     adsetId = adset.id;
   }
 

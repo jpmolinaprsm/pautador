@@ -110,6 +110,14 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   if (!publicar && tipoCodigo && audienciaCodigo) {
     presupuesto = await resolverPresupuestoPorTipo(tipoCodigo, activoKey, audienciaCodigo);
   }
+  // Ingesta (salida_manual_*): cada medio tiene su monto fijo por pauta en
+  // config_activos.presupuesto_default (leído del BM 2026-09-14: El Norte
+  // Ahora 15.000, Valle 24 7.500, Noticia Franca 10.000) — pisa el monto
+  // genérico del Tipo "0".
+  if (datos.origen === 'ingesta' && activoKey) {
+    const activoIngesta = await getActivoPorKey(activoKey);
+    if (activoIngesta && Number(activoIngesta.presupuesto_default) > 0) presupuesto = Number(activoIngesta.presupuesto_default);
+  }
 
   // Plataforma (punto 4): solo el modo "normal" puede pedir otra que Meta
   // (Youtube/Tik Tok/X/Display, ver src/config/plataformas.js) — esas
@@ -507,7 +515,19 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     err.status = 400;
     throw err;
   }
-  const resultado = await confirmarPauta(correlationId, celdas, usuario.nombre);
+  let resultado;
+  try {
+    resultado = await confirmarPauta(correlationId, celdas, usuario.nombre);
+  } catch (err) {
+    // Si Meta (o cualquier paso de la publicación) falla, el error tiene que
+    // quedar en la fila — antes la pieza quedaba "preview_lista" sin rastro
+    // y el mensaje solo lo veía quien estaba pidiendo en ese momento.
+    await updateRow('cola_pautas', 'correlation_id', correlationId, {
+      error_publicacion: String(err.message || err).slice(0, 2000),
+      errores_preview: String(err.message || err).slice(0, 2000),
+    }).catch((e) => console.warn('[pedidos] no pude guardar error_publicacion de', correlationId, e.message));
+    throw err;
+  }
   // publicado = de verdad salió algo a Meta. En modo normal (todas las celdas
   // manuales) NO: la pieza queda para cargar a mano — el front mostraba
   // "publicada en Meta (en pausa)" igual (bug visto en la revisión de

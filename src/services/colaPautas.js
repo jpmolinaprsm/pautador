@@ -1,5 +1,5 @@
 const { readTable } = require('./dataSource');
-const { getAudienciasPorActivo } = require('./audiencias');
+const { getAudienciasParaResolver } = require('./audiencias');
 
 // AppSheet separa multipicks con "," o "~" según el campo — aceptamos los dos.
 function parseLista(valor) {
@@ -109,7 +109,9 @@ function repartirParejo(combos, pctTotal) {
 // una sola audiencia, no arma matriz — devuelve un solo bloque al 100%.
 async function getMatrizParaPauta(pauta) {
   const objetivos = parseLista(pauta.objetivo);
-  const audienciasActivo = await getAudienciasPorActivo(pauta.activo);
+  // Reales del activo + catálogo del proyecto (Pedido Manual): así una pieza
+  // con código del catálogo muestra el nombre limpio y su tamaño.
+  const audienciasActivo = await getAudienciasParaResolver(pauta.activo);
 
   const audienciasCrudas = [
     resolverAudiencia(pauta.audiencia, pauta.otras_audiencias, audienciasActivo, 'principal'),
