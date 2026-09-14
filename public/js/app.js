@@ -3328,6 +3328,24 @@ function moverPesoConBloqueos(pesos, clavesActivas, bloqueados, claveMovida, val
   return nuevo;
 }
 
+// Cierra en 100 respetando bloqueadas: las fijas quedan como están y el
+// resto se reparte entre las libres proporcional a lo que tenían.
+function cerrarConBloqueos(pesos, clavesActivas, bloqueados) {
+  const fijas = clavesActivas.filter((k) => bloqueados[k]);
+  const libres = clavesActivas.filter((k) => !bloqueados[k]);
+  const sumaFijas = fijas.reduce((a, k) => a + (Number(pesos[k]) || 0), 0);
+  const nuevo = {};
+  fijas.forEach((k) => { nuevo[k] = Number(pesos[k]) || 0; });
+  if (!libres.length) return nuevo;
+  const disponible = Math.max(0, +(100 - sumaFijas).toFixed(2));
+  const prop = normalizar100(pesos, libres);
+  libres.forEach((k) => { nuevo[k] = +((prop[k] * disponible) / 100).toFixed(2); });
+  const suma = clavesActivas.reduce((a, k) => a + (nuevo[k] || 0), 0);
+  const ultima = libres[libres.length - 1];
+  nuevo[ultima] = +((nuevo[ultima] || 0) + (100 - suma)).toFixed(2);
+  return nuevo;
+}
+
 // Única fuente de verdad de los porcentajes: la usan el render y el envío.
 // Devuelve una línea por cruce; las desactivadas van en 0.
 function repartoResueltoPd2() {
@@ -5782,11 +5800,22 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (action === 'pd2-reparto-parejo') {
-    const claves = combosRepartoPd2().map((c) => c.clave);
-    state.pd2Reparto = normalizar100({}, claves);
-    state.pd2RepartoBloqueados = {};
-    state.pd2CombosExcluidos = {};
-    state.pd2RepartoSugerido = null;
+    // Reparte parejo lo que queda entre las celdas activas y NO bloqueadas:
+    // las bloqueadas y las desactivadas se respetan (usuario, 2026-09-14).
+    const filas = repartoResueltoPd2();
+    const bloq = state.pd2RepartoBloqueados || {};
+    const activas = filas.filter((f) => !f.excluida);
+    const fijas = activas.filter((f) => bloq[f.clave]);
+    const libres = activas.filter((f) => !bloq[f.clave]);
+    const sumaFijas = fijas.reduce((a, f) => a + f.pct, 0);
+    const nuevo = {};
+    fijas.forEach((f) => { nuevo[f.clave] = f.pct; });
+    if (libres.length) {
+      const parejo = normalizar100({}, libres.map((f) => f.clave));
+      const factor = Math.max(0, 100 - sumaFijas) / 100;
+      libres.forEach((f) => { nuevo[f.clave] = +(parejo[f.clave] * factor).toFixed(2); });
+    }
+    state.pd2Reparto = nuevo;
     renderCrucesV2();
     return;
   }
@@ -5977,12 +6006,13 @@ document.addEventListener('change', (e) => {
     // menos uno para poder pedirlo.
     const quedaAlguno = combosRepartoPd2().some((c) => !excluidos[c.clave]);
     if (!quedaAlguno) { e.target.checked = true; return; }
+    const previas = {}; repartoResueltoPd2().forEach((f) => { previas[f.clave] = f.pct; });
     state.pd2CombosExcluidos = excluidos;
     if (!e.target.checked) delete (state.pd2RepartoBloqueados || {})[clave];
-    // Los % vigentes se guardan tal cual: normalizar100 los vuelve a cerrar
-    // en 100 entre las activas.
-    const actual = {}; repartoResueltoPd2().forEach((f) => { actual[f.clave] = f.pct; });
-    state.pd2Reparto = actual;
+    // Se vuelve a cerrar en 100 respetando las bloqueadas: lo que libera (o
+    // pide) la celda va a las libres, proporcional a lo que tenían.
+    const activas = combosRepartoPd2().map((c) => c.clave).filter((k) => !excluidos[k]);
+    state.pd2Reparto = cerrarConBloqueos(previas, activas, state.pd2RepartoBloqueados || {});
     renderCrucesV2();
     return;
   }
