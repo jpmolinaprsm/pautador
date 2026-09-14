@@ -3424,9 +3424,9 @@ function renderCrucesV2() {
       + '</div>';
   }).join('');
 
-  const sugerido = state.pd2RepartoSugerido && state.pd2RepartoSugerido.codigo
-    ? '<div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px"><i class="ph ph-clock-counter-clockwise"></i> Reparto predefinido: igual al último pedido con este mismo cruce (' + esc(state.pd2RepartoSugerido.codigo) + (state.pd2RepartoSugerido.fecha ? ', ' + esc(state.pd2RepartoSugerido.fecha) : '') + '). Podés cambiarlo.</div>'
-    : '';
+  // El predefinido (último pedido igual) se aplica en silencio: PM/Cuentas
+  // no necesita saberlo; Implementadores revisan y corrigen en plataforma.
+  const sugerido = '';
 
   wrap.hidden = false;
   wrap.innerHTML = '<div class="field" style="margin-top:12px">'
