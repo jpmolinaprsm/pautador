@@ -81,6 +81,37 @@ router.put('/admin/proyectos/:proyecto', requireRol('administrador'), async (req
 // GET /api/admin/presupuestos — presupuesto restante por cuenta automatizada
 // (lo mismo que va en el mail diario). POST /api/admin/presupuestos/enviar —
 // manda el mail ahora (para probar la configuración SMTP).
+// GET /api/admin/diagnostico-meta?activo_key=&post_id= — crea (y borra) un
+// creative político sobre una publicación existente para ver qué responde
+// Meta DESDE ESTE SERVIDOR. Sirve para distinguir un problema del token de
+// uno del lugar desde donde se llama (Railway está en EE.UU.; la
+// autorización de anuncios políticos de Meta mira el país).
+router.get('/admin/diagnostico-meta', requireRol('administrador'), async (req, res) => {
+  const metaApi = require('../services/metaApi');
+  try {
+    const activo = await getActivoPorKey(String(req.query.activo_key || ''));
+    if (!activo || !activo.ad_account_id) return res.status(400).json({ error: 'activo_key sin cuenta publicitaria' });
+    const yo = await metaApi.graphGet('/me', { fields: 'id,name' });
+    const postId = String(req.query.post_id || '');
+    if (!postId) return res.json({ yo, nota: 'pasá post_id (page_id_postid) para probar el creative' });
+    let creative = null;
+    let errorCreative = null;
+    try {
+      creative = await metaApi.graphPost(`/${activo.ad_account_id}/adcreatives`, {
+        name: 'DIAGNOSTICO PAUTADOR (se borra)',
+        object_story_id: postId,
+        authorization_category: activo.authorization_category || 'POLITICAL',
+      });
+      await metaApi.graphDelete(`/${creative.id}`).catch(() => {});
+    } catch (err) {
+      errorCreative = { message: err.message, meta: err.metaError || null };
+    }
+    res.json({ yo, cuenta: activo.ad_account_id, creativeOk: !!creative, errorCreative });
+  } catch (err) {
+    responderError(res, 'admin/diagnostico-meta', err);
+  }
+});
+
 router.get('/admin/presupuestos', requireRol('administrador'), async (req, res) => {
   try {
     const filas = await estadoCuentas();

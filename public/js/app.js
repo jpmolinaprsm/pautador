@@ -4853,20 +4853,40 @@ function renderPreviewsBulkV2() {
 // Banner que queda en la pantalla de elegir modo después de un pedido
 // exitoso (ver resetPedidoAnunciosV2) — mismo contenido que
 // renderResultadoBulkV2 mostraba dentro del módulo, pero sobrevive al reset.
+// Al confirmar, el pedido sale de su pantalla y acá se dice claro si salió
+// o no (usuario, 2026-09-14). Si algo falló, el formulario queda cargado y
+// "Corregir el pedido" vuelve a él.
 function renderResultadoFinalV2() {
   const el = document.getElementById('pd2-resultado-final');
   const resultados = state.pd2BulkResultados;
   if (!resultados || !resultados.length) { el.hidden = true; return; }
   el.hidden = false;
   const unaSola = resultados.length === 1;
-  document.getElementById('pd2-resultado-final-body').innerHTML = resultados.map((r, i) => {
-    if (!r.ok) return `<div class="error">${unaSola ? '' : `Pieza ${i + 1}: `}${esc(r.error)}</div>`;
+  const ok = resultados.filter((r) => r.ok).length;
+  const fallidas = resultados.length - ok;
+  const todoOk = fallidas === 0;
+  const color = todoOk ? 'var(--color-success, #1f8a4c)' : (ok ? 'var(--color-warning, #d08a1e)' : 'var(--color-error, #c0392b)');
+  el.style.borderColor = color;
+  el.style.boxShadow = 'inset 4px 0 0 ' + color;
+  const titulo = document.getElementById('pd2-resultado-final-titulo');
+  if (titulo) {
+    titulo.style.color = color;
+    titulo.innerHTML = todoOk
+      ? '<i class="ph ph-check-circle"></i> ' + (unaSola ? 'El pedido salió' : `Salieron ${ok} de ${resultados.length} piezas`)
+      : (ok ? `<i class="ph ph-warning"></i> Salieron ${ok} de ${resultados.length} piezas — ${fallidas} no` : '<i class="ph ph-x-circle"></i> ' + (unaSola ? 'El pedido NO salió' : 'Ninguna pieza salió'));
+  }
+  const filas = resultados.map((r, i) => {
+    if (!r.ok) return `<div class="error" style="margin:4px 0">${unaSola ? '' : `Pieza ${i + 1}: `}${esc(r.error)}</div>`;
     const estado = r.publicado
       ? 'publicada en Meta (en pausa)'
       : 'creada — queda para cargar a mano' + (r.plataforma && r.plataforma !== 'Meta' ? ' en ' + r.plataforma : '') + ' y marcar hecha desde Historial';
     const prefijo = unaSola ? 'Código' : `Pieza ${i + 1}: código`;
-    return `<div style="color:var(--color-accent-2-600)">${prefijo} <code>${esc(r.codigo)}</code> — ${estado}.</div>`;
+    return `<div style="margin:4px 0">${prefijo} <code>${esc(r.codigo)}</code> — ${estado}.</div>`;
   }).join('');
+  const acciones = fallidas
+    ? '<div style="margin-top:10px"><button type="button" class="btn btn-primary" data-action="pd2-resultado-corregir">Corregir el pedido</button> <span style="font-size:12px;color:var(--color-neutral-500);margin-left:8px">Lo que cargaste sigue ahí.</span></div>'
+    : '<div style="margin-top:8px;font-size:12px;color:var(--color-neutral-500)">Lo ves en Historial de Anuncios.</div>';
+  document.getElementById('pd2-resultado-final-body').innerHTML = filas + acciones;
 }
 
 // Vuelve la pantalla de "Pedido de Anuncios"/"Crear Anuncios" al estado
@@ -5026,24 +5046,23 @@ async function enviarBulkV2() {
   state.pd2BulkEnviando = false;
   state.pd2BulkPreviews = null;
 
-  // Todo salió bien: reseteo la vista para el próximo pedido en vez de
-  // dejar la Campaña/Objetivo/Audiencia del anterior cargados. Si hubo
-  // algún error, me quedo en el módulo para que se pueda corregir.
-  if (state.pd2BulkResultados.length && state.pd2BulkResultados.every((r) => r.ok)) {
+  // Salga bien o mal, se deja la pantalla del pedido y el resultado se
+  // muestra arriba, claro (usuario, 2026-09-14). Si todo salió: formulario
+  // limpio para el próximo. Si algo falló: el formulario queda cargado y
+  // desbloqueado, y "Corregir el pedido" vuelve a él.
+  const todoOk = state.pd2BulkResultados.length && state.pd2BulkResultados.every((r) => r.ok);
+  if (todoOk) {
     resetPedidoAnunciosV2();
-    renderTabPedido2();
-    return;
+  } else {
+    bloquearFormularioV2(false);
+    btn.disabled = false;
+    btn.textContent = 'Ver preview';
+    state.pd2ModoCarga = null;
   }
-
-  // El bloqueo de campos (bloquearFormularioV2) asume que lo que se manda a
-  // confirmar es EXACTAMENTE lo que se previsualizó — pero acá ya se sabe
-  // que al menos una pieza falló al confirmar (campos obligatorios, límite
-  // de Meta, lo que sea). Dejar los campos bloqueados le sacaba la única
-  // forma de corregir sin pasar por "Editar" — que además no tenía handler
-  // (ver acción pd2-editar-bloqueo).
-  bloquearFormularioV2(false);
-  btn.disabled = false;
-  btn.textContent = 'Ver preview';
+  renderTabPedido2();
+  renderResultadoFinalV2();
+  const banner = document.getElementById('pd2-resultado-final');
+  if (banner) banner.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 function editarBloqueoV2() {
@@ -5687,6 +5706,7 @@ document.addEventListener('click', (e) => {
   if (action === 'abrir-lightbox') { e.stopPropagation(); state.lightboxUrl = el.dataset.url; renderLightbox(); return; }
   if (action === 'cerrar-lightbox') { state.lightboxUrl = null; renderLightbox(); return; }
   if (action === 'pd2-resultado-final-cerrar') { state.pd2BulkResultados = null; renderResultadoFinalV2(); return; }
+  if (action === 'pd2-resultado-corregir') { state.pd2BulkResultados = null; state.pd2ModoCarga = 'anuncios'; renderResultadoFinalV2(); renderTabPedido2(); return; }
   if (action === 'ir-a-validacion') { cambiarTab('pendientes'); return; }
   // Mismo botón, dos pasos: sin preview verifica; con preview crea.
   if (action === 'pd2-confirmar-modulo') { confirmarModuloV2(Number(id)); return; }
