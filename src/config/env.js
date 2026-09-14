@@ -126,6 +126,12 @@ const env = {
   alertasMailTo: String(process.env.ALERTAS_MAIL_TO || '').split(',').map((s) => s.trim()).filter(Boolean),
   // Hora (0-23, Argentina) a la que sale el resumen diario.
   alertasHora: Number(process.env.ALERTAS_HORA || 9),
+  // Envío por Gmail API (HTTPS, para hostings que bloquean SMTP como
+  // Railway): refresh token de la casilla que manda, obtenido una vez en
+  // /auth/gmail (mismo cliente OAuth del login). Si está, gana sobre SMTP.
+  gmailRefreshToken: process.env.GMAIL_REFRESH_TOKEN || '',
+  gmailRedirectUri: process.env.GMAIL_REDIRECT_URI
+    || String(process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback').replace('/auth/google/callback', '/auth/gmail/callback'),
 };
 
 if (env.dataSource === 'google' && !env.sheetId) {
