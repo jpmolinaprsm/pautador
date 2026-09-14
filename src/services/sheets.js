@@ -72,13 +72,13 @@ async function appendRow(sheetName, rowValues) {
 // Las usan la ingesta de salida_manual_* y la réplica a "Tareas" (punto 3
 // del plan): mismo cliente y misma Service Account, distinto spreadsheetId.
 
-// PROHIBIDO ESCRIBIR (orden del usuario, 2026-09-11): la planilla de
-// PRODUCCIÓN "Appsheet - Tareas de Asana", que lee Make para crear tareas
-// reales. Un reintento mal acotado le escribió 61 filas de prueba y
-// desfasó el trigger de Make. Cualquier escritura a este ID tira error,
-// sin importar qué diga el .env — solo el usuario, cuando lo decida, saca
-// el ID de esta lista.
-const PLANILLAS_PROHIBIDAS = new Set(['180z6MdtteHN0yuT_EI1AMKZ6fjdwU_EDArxbrkNRTMw']);
+// Freno de escritura por planilla. Del 2026-09-11 al 2026-09-14 estuvo acá
+// la planilla de PRODUCCIÓN "Appsheet - Tareas de Asana"
+// (180z6MdtteHN0yuT_EI1AMKZ6fjdwU_EDArxbrkNRTMw), después de que un
+// reintento mal acotado le escribió 61 filas de prueba. El usuario la
+// habilitó el 2026-09-14 para la prueba de Tareas → Make → Asana. Si hay
+// que volver a frenarla, se agrega el ID a esta lista y listo.
+const PLANILLAS_PROHIBIDAS = new Set([]);
 function verificarEscrituraPermitida(spreadsheetId) {
   if (PLANILLAS_PROHIBIDAS.has(String(spreadsheetId || '').trim())) {
     throw new Error(`Escritura bloqueada: la planilla ${spreadsheetId} es de producción (Tareas de Asana) y está prohibida por el usuario.`);
