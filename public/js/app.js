@@ -3395,51 +3395,54 @@ function renderCrucesV2() {
     return;
   }
 
+  // Cuadrícula (usuario, 2026-09-14): audiencias en filas, objetivos en
+  // columnas; cada celda es un cruce con su %, slider, activar y candado.
   const COLORES = ['var(--color-accent)', '#2a9d8f', '#e76f51', '#8d6cab', '#c9a227', '#5c7cfa'];
   const objetivos = [...new Set(filas.map((f) => f.objetivo))];
+  const audiencias = [];
+  filas.forEach((f) => { if (!audiencias.find((a) => a.codigo === f.audiencia.codigo)) audiencias.push(f.audiencia); });
   const colorDe = (obj) => COLORES[objetivos.indexOf(obj) % COLORES.length];
   const activas = filas.filter((f) => !f.excluida);
   const libres = activas.filter((f) => !f.bloqueada);
+  const porClave = {};
+  filas.forEach((f) => { porClave[f.clave] = f; });
 
-  // Barra apilada: un tramo por cruce activo, del color del objetivo.
   const tramos = filas.filter((f) => !f.excluida && f.pct > 0).map((f, i) => '<div title="' + esc(f.objetivo + ' · ' + f.audiencia.nombre + ': ' + f.pct + '%') + '" style="width:' + f.pct + '%;background:' + colorDe(f.objetivo) + ';opacity:' + (i % 2 ? '.72' : '1') + ';border-right:1px solid var(--color-surface, #fff)"></div>');
   const barra = '<div style="display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--color-divider);margin-bottom:10px">' + tramos.join('') + '</div>';
 
-  const lineas = filas.map((f) => {
+  const celda = (f) => {
     const datos = 'data-clave="' + esc(f.clave) + '"';
-    // Una sola activa: no hay nada que repartir (siempre 100).
-    const fijo = f.excluida || activas.length <= 1 || (f.bloqueada) || (libres.length <= 1 && !f.bloqueada);
-    const colorIn = f.excluida ? 'var(--color-neutral-500)' : colorDe(f.objetivo);
-    return '<div style="display:flex;align-items:center;gap:12px;padding:8px 10px;border-top:1px solid var(--color-divider)' + (f.excluida ? ';opacity:.45' : '') + '">'
-      + '<input type="checkbox" ' + (f.excluida ? '' : 'checked') + ' title="' + (f.excluida ? 'Activar este cruce' : 'Desactivar este cruce') + '" data-action="pd2-excluir-cruce" ' + datos + ' style="width:16px;height:16px;accent-color:var(--color-accent);flex:none">'
-      + '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + colorDe(f.objetivo) + ';flex:none"></span>'
-      + '<div class="row-ellip" style="flex:1;min-width:160px;font-size:13px"><span style="font-family:var(--font-heading)">' + esc(f.objetivo) + '</span> <span style="color:var(--color-neutral-500)">·</span> ' + esc(f.audiencia.nombre)
-      +   (f.audiencia.manual ? ' <span class="tag tag-outline" style="font-size:10px">a mano</span>' : '')
+    const fijo = f.excluida || activas.length <= 1 || f.bloqueada || (libres.length <= 1 && !f.bloqueada);
+    const color = colorDe(f.objetivo);
+    return '<td style="padding:8px 10px;border-top:1px solid var(--color-divider);border-left:1px solid var(--color-divider);vertical-align:top' + (f.excluida ? ';opacity:.45' : '') + '">'
+      + '<div style="display:flex;align-items:center;gap:6px">'
+      +   '<input type="checkbox" ' + (f.excluida ? '' : 'checked') + ' title="' + (f.excluida ? 'Activar este cruce' : 'Desactivar este cruce') + '" data-action="pd2-excluir-cruce" ' + datos + ' style="width:15px;height:15px;accent-color:' + color + ';flex:none">'
+      +   '<input type="number" min="0" max="100" step="1" value="' + Math.round(f.pct) + '" ' + (fijo ? 'disabled ' : '') + 'data-action="pd2-cruce-slider" ' + datos + ' title="% del total" style="width:58px;padding:4px 6px;text-align:right;border:1px solid var(--color-divider);border-radius:4px;background:var(--color-surface, #fff);color:inherit;font-family:var(--font-heading);font-size:13px;flex:none' + (fijo ? ';opacity:.6' : '') + '">'
+      +   '<span style="font-size:12px;color:var(--color-neutral-500)">%</span>'
+      +   '<button type="button" title="' + (f.bloqueada ? 'Desbloquear' : 'Bloquear en ' + Math.round(f.pct) + '%') + '" ' + (f.excluida ? 'disabled ' : '') + 'data-action="pd2-cruce-bloquear" ' + datos + ' style="cursor:pointer;border:1px solid ' + (f.bloqueada ? color : 'var(--color-divider)') + ';background:' + (f.bloqueada ? color : 'transparent') + ';color:' + (f.bloqueada ? '#fff' : 'var(--color-neutral-500)') + ';font-size:13px;width:26px;height:26px;border-radius:4px;flex:none;margin-left:auto"><i class="ph ph-' + (f.bloqueada ? 'lock-simple' : 'lock-simple-open') + '"></i></button>'
+      +   '<button type="button" title="Todo el presupuesto a este cruce" ' + (f.excluida || activas.length <= 1 ? 'disabled ' : '') + 'data-action="pd2-cruce-todo" ' + datos + ' style="cursor:pointer;border:1px solid var(--color-divider);background:transparent;color:var(--color-neutral-500);font-size:13px;width:26px;height:26px;border-radius:4px;flex:none"><i class="ph ph-target"></i></button>'
       + '</div>'
-      + '<input type="range" min="0" max="100" step="1" value="' + Math.round(f.pct) + '" ' + (fijo ? 'disabled ' : '') + 'data-action="pd2-cruce-slider" ' + datos + ' style="width:180px;flex:none;accent-color:' + colorIn + (fijo ? ';opacity:.4' : '') + '">'
-      + '<input type="number" min="0" max="100" step="1" value="' + Math.round(f.pct) + '" ' + (fijo ? 'disabled ' : '') + 'data-action="pd2-cruce-slider" ' + datos + ' title="Porcentaje del total" style="width:60px;padding:4px 6px;text-align:right;border:1px solid var(--color-divider);border-radius:4px;background:var(--color-surface, #fff);color:inherit;font-family:var(--font-heading);font-size:13px;flex:none' + (fijo ? ';opacity:.6' : '') + '">'
-      + '<span style="width:14px;flex:none;font-size:12px;color:var(--color-neutral-500)">%</span>'
-      + '<button type="button" title="' + (f.bloqueada ? 'Desbloquear — vuelve a moverse con el resto' : 'Bloquear en ' + Math.round(f.pct) + '% mientras se mueven las demás') + '" ' + (f.excluida ? 'disabled ' : '') + 'data-action="pd2-cruce-bloquear" ' + datos + ' style="cursor:pointer;border:1px solid ' + (f.bloqueada ? 'var(--color-accent)' : 'var(--color-divider)') + ';background:' + (f.bloqueada ? 'var(--color-accent)' : 'transparent') + ';color:' + (f.bloqueada ? '#fff' : 'var(--color-neutral-500)') + ';font-size:14px;width:30px;height:28px;border-radius:4px;flex:none"><i class="ph ph-' + (f.bloqueada ? 'lock-simple' : 'lock-simple-open') + '"></i></button>'
-      + '<button type="button" title="Todo el presupuesto a este cruce" ' + (f.excluida || activas.length <= 1 ? 'disabled ' : '') + 'data-action="pd2-cruce-todo" ' + datos + ' style="cursor:pointer;border:1px solid var(--color-divider);background:transparent;color:var(--color-neutral-400);font-size:11px;padding:5px 8px;border-radius:4px;flex:none">Todo acá</button>'
-      + '</div>';
-  }).join('');
+      + '<input type="range" min="0" max="100" step="1" value="' + Math.round(f.pct) + '" ' + (fijo ? 'disabled ' : '') + 'data-action="pd2-cruce-slider" ' + datos + ' style="width:100%;margin-top:6px;accent-color:' + color + (fijo ? ';opacity:.4' : '') + '">'
+      + '</td>';
+  };
 
-  // El predefinido (último pedido igual) se aplica en silencio: PM/Cuentas
-  // no necesita saberlo; Implementadores revisan y corrigen en plataforma.
-  const sugerido = '';
+  const cabecera = '<tr>'
+    + '<th style="text-align:left;padding:8px 10px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-500);font-weight:500">Audiencia \\ Objetivo</th>'
+    + objetivos.map((o) => '<th style="text-align:left;padding:8px 10px;border-left:1px solid var(--color-divider);font-family:var(--font-heading);font-size:13px"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + colorDe(o) + ';margin-right:6px;vertical-align:middle"></span>' + esc(o) + '</th>').join('')
+    + '</tr>';
+  const cuerpo = audiencias.map((a) => '<tr>'
+    + '<td style="padding:8px 10px;border-top:1px solid var(--color-divider);font-size:13px;vertical-align:top;max-width:260px">' + esc(a.nombre) + (a.manual ? ' <span class="tag tag-outline" style="font-size:10px">a mano</span>' : '') + '</td>'
+    + objetivos.map((o) => { const f = porClave[o + '|' + a.codigo]; return f ? celda(f) : '<td></td>'; }).join('')
+    + '</tr>').join('');
 
   wrap.hidden = false;
   wrap.innerHTML = '<div class="field" style="margin-top:12px">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-    +   '<label style="margin:0">Distribución de la inversión <span style="font-weight:400;color:var(--color-neutral-500)">(% del total para cada cruce Objetivo × Audiencia — el resto se acomoda solo; el candado fija una línea)</span></label>'
+    +   '<label style="margin:0">Distribución de la inversión <span style="font-weight:400;color:var(--color-neutral-500)">(% del total en cada cruce — el resto se acomoda solo; el candado fija una celda)</span></label>'
     +   '<button type="button" class="btn btn-secondary" style="font-size:12px;padding:4px 10px" data-action="pd2-reparto-parejo"><i class="ph ph-equals"></i> Repartir parejo</button>'
     + '</div>'
-    + sugerido
     + barra
-    + '<div style="border:1px solid var(--color-divider);border-radius:var(--radius-md);overflow:hidden">'
-    +   '<div style="display:flex;justify-content:space-between;padding:6px 10px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-500)"><span>Cruce Objetivo × Audiencia</span><span>% del total · bloquear · todo acá</span></div>'
-    +   lineas
-    + '</div>'
+    + '<div style="overflow-x:auto;border:1px solid var(--color-divider);border-radius:var(--radius-md)"><table style="width:100%;border-collapse:collapse"><thead>' + cabecera + '</thead><tbody>' + cuerpo + '</tbody></table></div>'
     + '<div style="margin-top:8px;font-size:13px;font-family:var(--font-heading);color:var(--color-accent-300)">Total: 100%' + (activas.length !== filas.length ? ' <span style="color:var(--color-neutral-500);font-weight:400">(' + (filas.length - activas.length) + ' cruce(s) desactivado(s))</span>' : '') + '</div>'
     + '</div>';
 }
