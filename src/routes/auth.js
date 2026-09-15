@@ -2,6 +2,7 @@ const express = require('express');
 const { google } = require('googleapis');
 const env = require('../config/env');
 const { loginPorEmail, resolverUsuarioValidado, serializarUsuario } = require('../services/usuarios');
+const { registrar } = require('../services/eventosUso');
 
 const router = express.Router();
 
@@ -54,9 +55,11 @@ router.get('/auth/google/callback', async (req, res) => {
     const payload = ticket.getPayload();
     if (!payload.email_verified) throw new Error('Tu mail de Google todavía no está verificado.');
     const usuario = await resolverUsuarioValidado(payload.email, payload.name);
+    registrar({ usuario_id: usuario.id, usuario_nombre: usuario.nombre, rol: usuario.rol, accion: 'Login con Google', ruta: 'GET /auth/google/callback', detalle: payload.email });
     res.redirect('/?uid=' + encodeURIComponent(usuario.id));
   } catch (err) {
     console.error('[auth/google/callback]', err.message);
+    registrar({ accion: 'Login con Google', ruta: 'GET /auth/google/callback', resultado: 'error', error: err.message });
     volverConError(err.message || 'No se pudo iniciar sesión con Google.');
   }
 });
@@ -106,8 +109,10 @@ router.get('/auth/gmail/callback', async (req, res) => {
 router.post('/api/auth/login', async (req, res) => {
   try {
     const usuario = await loginPorEmail(req.body.email);
+    registrar({ usuario_id: usuario.id, usuario_nombre: usuario.nombre, rol: usuario.rol, accion: 'Login por mail', ruta: 'POST /api/auth/login', detalle: String(req.body.email || '') });
     res.json(serializarUsuario(usuario));
   } catch (err) {
+    registrar({ accion: 'Login por mail', ruta: 'POST /api/auth/login', detalle: String((req.body || {}).email || ''), resultado: 'error', error: err.message });
     res.status(err.status || 500).json({ error: err.message });
   }
 });

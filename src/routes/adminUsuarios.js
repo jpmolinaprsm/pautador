@@ -78,6 +78,18 @@ router.put('/admin/proyectos/:proyecto', requireRol('administrador'), async (req
   }
 });
 
+// GET /api/admin/uso?dias=30 — resumen del registro de uso (solo superadmin,
+// ver services/eventosUso.js).
+router.get('/admin/uso', requireRol('administrador'), async (req, res) => {
+  if (!req.usuario.es_superadmin) return res.status(403).json({ error: 'Solo el superadmin ve el uso.' });
+  try {
+    const dias = Math.min(365, Math.max(1, Number(req.query.dias) || 30));
+    res.json(await require('../services/eventosUso').resumenUso(dias));
+  } catch (err) {
+    responderError(res, 'admin/uso', err);
+  }
+});
+
 // POST /api/admin/insumos/exportar — vuelca ahora las tablas a la planilla
 // de insumos (lo mismo que corre solo una vez por día).
 router.post('/admin/insumos/exportar', requireRol('administrador'), async (req, res) => {

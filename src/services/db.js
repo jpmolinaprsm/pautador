@@ -81,6 +81,7 @@ const COLUMNAS = {
   proyectos_estado: ['proyecto', 'estado', 'modificado_por', 'modificado_en', 'activado_hasta'],
   audiencias_catalogo: ['id', 'proyecto', 'canal', 'codigo', 'nombre', 'tamano', 'n_potencial', 'saved_audience_id', 'activo_key', 'activo_excel', 'hoja', 'creado_en'],
   escala_presupuestos: ['tamaño', 'intensidad', 'monto'],
+  eventos_uso: ['id', 'fecha', 'usuario_id', 'usuario_nombre', 'rol', 'accion', 'ruta', 'proyecto', 'modo', 'canal', 'referencia', 'detalle', 'resultado', 'error', 'duracion_ms'],
 };
 
 function columnasDe(tabla) {

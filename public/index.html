@@ -501,6 +501,19 @@
       </p>
       <div id="usu-proyectos"></div>
     </div>
+    <!-- Uso (solo superadmin): registro de acciones por usuario, ver
+         services/eventosUso.js. -->
+    <div class="expand-panel" id="usu-uso-panel" style="margin-top:16px" hidden>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+        <h5 style="margin:0">Uso</h5>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select class="input" id="usu-uso-dias" style="width:auto"><option value="7">Últimos 7 días</option><option value="30" selected>Últimos 30 días</option><option value="90">Últimos 90 días</option></select>
+          <button type="button" class="btn btn-secondary" data-action="usu-uso-recargar" style="font-size:12px;padding:4px 10px"><i class="ph ph-arrows-clockwise"></i> Actualizar</button>
+        </div>
+      </div>
+      <p style="font-size:12px;color:var(--color-neutral-500);margin:0 0 12px">Quién entra, qué pide y dónde falla. Se registra en el servidor cada acción que cambia algo.</p>
+      <div id="usu-uso"></div>
+    </div>
   </div>
 
   <div id="batch-bar" class="batch-bar" hidden>

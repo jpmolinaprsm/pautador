@@ -2607,10 +2607,60 @@ async function cambiarEstadoProyectoPanel(proyecto, estado) {
   renderProyectosPanel();
 }
 
+// ---------- Panel Usuarios → Uso (solo superadmin) ----------
+async function cargarUsoPanel() {
+  const sel = document.getElementById('usu-uso-dias');
+  const dias = sel ? Number(sel.value) || 30 : 30;
+  state.usuUsoCargando = true;
+  renderUsoPanel();
+  try {
+    const r = await apiFetch('/api/admin/uso?dias=' + dias);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detalle || data.error || 'No se pudo cargar el uso.');
+    state.usuUso = data; state.usuUsoError = '';
+  } catch (err) {
+    state.usuUso = null; state.usuUsoError = err.message;
+  }
+  state.usuUsoCargando = false;
+  renderUsoPanel();
+}
+
+function renderUsoPanel() {
+  const panel = document.getElementById('usu-uso-panel');
+  const cont = document.getElementById('usu-uso');
+  if (!panel || !cont) return;
+  const u = usuarioActual();
+  panel.hidden = !(u && u.es_superadmin);
+  if (panel.hidden) return;
+  if (state.usuUsoCargando) { cont.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500)">Cargando…</p>'; return; }
+  if (state.usuUsoError) { cont.innerHTML = `<p class="error">${esc(state.usuUsoError)}</p>`; return; }
+  const d = state.usuUso;
+  if (!d) { cont.innerHTML = ''; return; }
+  const fechaHora = (iso) => { const x = new Date(iso); return Number.isNaN(x.getTime()) ? String(iso || '') : x.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
+  const tarjeta = (n, label) => `<div style="padding:10px 14px;border:1px solid var(--color-divider);border-radius:var(--radius-md);min-width:120px"><div style="font-family:var(--font-heading);font-size:20px">${n}</div><div style="font-size:11px;color:var(--color-neutral-500)">${label}</div></div>`;
+  const t = d.totales;
+  const tarjetas = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${tarjeta(t.usuariosHoy, 'usuarios hoy')}${tarjeta(t.usuarios7, 'usuarios 7 días')}${tarjeta(t.usuarios30, `usuarios ${d.dias} días`)}${tarjeta(t.pedidos7, 'pedidos 7 días')}${tarjeta(t.acciones7, 'acciones 7 días')}${tarjeta(t.errores7, 'errores 7 días')}</div>`;
+  const fila = 'padding:6px 0;border-top:1px solid var(--color-divider)';
+  const porUsuario = `<h6 style="margin:10px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--color-neutral-500)">Por usuario (${d.dias} días)</h6>
+    <div style="display:grid;grid-template-columns:minmax(0,1.4fr) 110px 120px 80px 80px 80px;gap:10px;font-size:13px;min-width:640px">
+      <div class="grid-header" style="display:contents"><div>Usuario</div><div>Rol</div><div>Última acción</div><div>Acciones</div><div>Pedidos</div><div>Errores</div></div>
+      ${d.porUsuario.map((x) => `<div style="display:contents"><div style="${fila};font-weight:600">${esc(x.nombre)}</div><div style="${fila};color:var(--color-neutral-500)">${esc(x.rol)}</div><div style="${fila}">${esc(fechaHora(x.ultimo))}</div><div style="${fila}">${x.acciones} <span style="color:var(--color-neutral-500)">(${x.acciones7} en 7d)</span></div><div style="${fila}">${x.pedidos}</div><div style="${fila};${x.errores ? 'color:var(--color-error, #c0392b)' : ''}">${x.errores}</div></div>`).join('') || '<div style="grid-column:1 / -1;color:var(--color-neutral-500);padding:8px 0">Todavía no hay actividad registrada.</div>'}
+    </div>`;
+  const porProyecto = d.porProyecto.length ? `<h6 style="margin:14px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--color-neutral-500)">Pedidos por proyecto</h6><div style="font-size:13px;display:flex;flex-wrap:wrap;gap:6px">${d.porProyecto.map((p) => `<span class="tag tag-outline">${esc(p.proyecto)} · ${p.pedidos}</span>`).join('')}</div>` : '';
+  const ultimos = `<h6 style="margin:14px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--color-neutral-500)">Últimas acciones</h6>
+    <div class="lista-scroll" style="max-height:360px"><div style="display:grid;grid-template-columns:110px minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr) minmax(0,2fr) 60px;gap:10px;font-size:12px;min-width:900px">
+      <div class="grid-header" style="display:contents"><div>Cuándo</div><div>Usuario</div><div>Acción</div><div>Proyecto</div><div>Detalle</div><div></div></div>
+      ${d.ultimos.map((e) => `<div style="display:contents"><div style="${fila}">${esc(fechaHora(e.fecha))}</div><div style="${fila}">${esc(e.usuario_nombre || e.usuario_id || '—')}</div><div style="${fila}">${esc(e.accion || e.ruta || '')}</div><div style="${fila};color:var(--color-neutral-500)">${esc(e.proyecto || '')}${e.modo ? ' · ' + esc(e.modo) : ''}</div><div style="${fila};color:var(--color-neutral-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc((e.referencia ? e.referencia + ' · ' : '') + (e.detalle || '') + (e.error ? ' — ' + e.error : ''))}">${e.referencia ? '<code>' + esc(e.referencia) + '</code> ' : ''}${esc(e.detalle || '')}${e.error ? ' <span style="color:var(--color-error, #c0392b)">' + esc(e.error) + '</span>' : ''}</div><div style="${fila}">${e.resultado === 'error' ? '<span class="tag" style="font-size:10px;color:var(--color-error, #c0392b)">error</span>' : '<span class="tag tag-accent-2" style="font-size:10px">ok</span>'}</div></div>`).join('')}
+    </div></div>`;
+  cont.innerHTML = tarjetas + '<div style="overflow-x:auto">' + porUsuario + '</div>' + porProyecto + ultimos;
+}
+
 function renderTabUsuarios() {
   const cont = document.getElementById('tab-usuarios');
   if (!cont || cont.hidden) return;
   if (!state.usuProyectos || !state.usuProyectos.length) cargarProyectosPanel(); else renderProyectosPanel();
+  const yo = usuarioActual();
+  if (yo && yo.es_superadmin && !state.usuUso && !state.usuUsoCargando && !state.usuUsoError) cargarUsoPanel(); else renderUsoPanel();
   const datos = state.usuDatos;
   const lista = document.getElementById('usu-lista');
   const detalle = document.getElementById('usu-detalle');
@@ -5504,6 +5554,9 @@ function avanzarSiCorresponde() {
 async function entrarAlApp() {
   const permitidas = tabsPermitidas();
   if (!permitidas.includes(state.tabActiva)) state.tabActiva = permitidas[0] || 'pendientes';
+  // Registro de uso: "Entró al app" con proyecto/modo/canal (lo anota el
+  // servidor; si falla no pasa nada).
+  apiFetch('/api/uso/entrada', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proyecto: state.proyectoActivo, modo: state.modoActivo, canal: state.ecosistemaActivo }) }).catch(() => {});
   cambiarTab(state.tabActiva);
 }
 
@@ -5987,6 +6040,7 @@ document.addEventListener('click', (e) => {
   if (action === 'stop-prop') { e.stopPropagation(); return; }
   if (action === 'pedir-asignacion') { pedirAsignacionProyectos(); return; }
   if (action === 'crea-recargar') { cargarCreatividades(); return; }
+  if (action === 'usu-uso-recargar') { cargarUsoPanel(); return; }
   if (action === 'pd-csv-reintentar') { validarFilasCsv([Number(id)]); return; }
   if (action === 'elegir-usuario') { elegirUsuario(id); return; }
   if (action === 'elegir-proyecto') { elegirProyecto(id); return; }
@@ -6214,6 +6268,7 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'crea-campana') { state.creaFiltro.campana = e.target.value; renderTabCreatividades(); return; }
   if (e.target.id === 'crea-vencidas') { state.creaFiltro.vencidas = e.target.checked; cargarCreatividades(); return; }
   if (e.target.id === 'usu-proyectos-solo-visibles') { state.usuProyectosSoloVisibles = e.target.checked; renderProyectosPanel(); return; }
+  if (e.target.id === 'usu-uso-dias') { cargarUsoPanel(); return; }
   if (e.target.id === 'usu-edit-rol') { if (state.usuEdit) { state.usuEdit.rol = e.target.value; renderTabUsuarios(); } return; }
   if (e.target.id === 'usu-edit-habilitado') { if (state.usuEdit) state.usuEdit.habilitado = e.target.checked; return; }
   if (e.target.id === 'usu-edit-nombre') { if (state.usuEdit) state.usuEdit.nombre = e.target.value; return; }

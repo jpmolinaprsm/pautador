@@ -46,6 +46,9 @@ if (!storage.habilitado()) {
 // x-ingesta-secret — por eso va ANTES de usuarioActual y fuera de /api.
 app.use(ingestaRoutes.webhook);
 app.use('/api', usuarioActual);
+// Registro de uso: toda request que cambia algo, con usuario y resultado
+// (ver services/eventosUso.js; Panel Usuarios → Uso, solo superadmin).
+app.use('/api', require('./services/eventosUso').registrarRequests);
 app.use('/api', ingestaRoutes.api);
 app.use('/api', configRoutes);
 app.use('/api', pendientesRoutes);

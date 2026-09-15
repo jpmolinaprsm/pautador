@@ -31,6 +31,14 @@ router.get('/usuarios', async (req, res) => {
   }
 });
 
+// POST /api/uso/entrada — el front avisa cuando alguien entra al
+// app con proyecto/modo/canal elegidos. No hace nada: el registro lo
+// escribe el middleware de uso (services/eventosUso.js, "Entró al app").
+router.post('/uso/entrada', (req, res) => {
+  if (!req.usuario) return res.status(401).json({ error: 'Sin usuario.' });
+  res.json({ ok: true });
+});
+
 // POST /api/usuarios/pedir-asignacion — el usuario logueado (del dominio,
 // dado de alta solo pero sin proyectos) pide que un administrador le asigne
 // proyectos: mail a todos los administradores habilitados con mail (si no
