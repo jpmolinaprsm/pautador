@@ -3763,12 +3763,15 @@ function renderTabPedido2() {
   document.getElementById('pd2-otras-refuerzo-wrap').hidden = !refuerzoPrevio.includes('Otra');
   renderCrucesV2();
 
-  // Otra plataforma que Meta: no hay "Público" (publicación existente), ni
-  // Red ni Placement — la pieza se carga a mano en esa plataforma.
-  if (!esMetaPd2 && state.pd2Visibilidad !== 'DARK') state.pd2Visibilidad = 'DARK';
+  // "Público" existe en Meta, Youtube, Tik Tok y X (promocionar una
+  // publicación que ya existe en esa red); Display no (usuario, 2026-09-15).
+  // Con varias plataformas, la Visibilidad vale para todas; Display queda
+  // siempre Oculto. Red y Placement siguen siendo solo de Meta.
+  const tienePublicoPd2 = plataformasPd2().some((n) => n !== 'Display');
+  if (!tienePublicoPd2 && state.pd2Visibilidad !== 'DARK') state.pd2Visibilidad = 'DARK';
   const selVis = document.getElementById('pd2-visibilidad');
   selVis.value = state.pd2Visibilidad;
-  selVis.disabled = !esMetaPd2;
+  selVis.disabled = !tienePublicoPd2;
   document.getElementById('pd2-formato-wrap').hidden = state.pd2Visibilidad !== 'DARK';
   const formatoPrevio = document.getElementById('pd2-formato') ? document.getElementById('pd2-formato').value : '';
   const formatosPd2 = formatosPd2Disponibles();
@@ -4071,7 +4074,103 @@ function confirmarPlataformasPd2() {
   renderTabPedido2();
 }
 
+// Material de un contenido. Con una sola plataforma Meta: como siempre
+// (publicación / link / archivo / carrusel). Con varias plataformas, o una
+// sola que no es Meta: una fila por plataforma, cada una con su link
+// (usuario, 2026-09-15: "una fila de link por plataforma"). Display admite
+// un link a carpeta de Drive/Dropbox o varias imágenes, una por línea.
 function renderMaterialBulkV2(i) {
+  const plats = plataformasPd2();
+  if (plats.length === 1 && plats[0] === 'Meta') return renderMaterialMetaV2(i);
+  return plats.map((n) => `
+    <div style="margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;margin-bottom:4px"><i class="ph ${ICONO_PLATAFORMA[n] || 'ph-globe'}"></i> ${esc(n)}</div>
+      ${n === 'Meta' ? renderMaterialMetaV2(i) : renderMaterialOtraPlataformaV2(i, n, plats.length === 1)}
+    </div>`).join('');
+}
+
+const SLUG_PLATAFORMA = { Meta: 'meta', Youtube: 'youtube', 'Tik Tok': 'tiktok', X: 'x', Display: 'display' };
+const LINK_PUBLICO_PD2 = {
+  Meta: /^https?:\/\/(www\.|m\.|business\.)?(facebook\.com|fb\.com|fb\.watch|instagram\.com)\//i,
+  Youtube: /^https?:\/\/(www\.|m\.)?(youtube\.com\/(watch\?|shorts\/|live\/)|youtu\.be\/)/i,
+  'Tik Tok': /^https?:\/\/(www\.|vm\.|vt\.)?tiktok\.com\//i,
+  X: /^https?:\/\/(www\.|mobile\.)?(x\.com|twitter\.com)\//i,
+};
+function esLinkCarpetaPd2(url) {
+  return /^https?:\/\/(drive\.google\.com\/drive\/(u\/\d+\/)?folders\/|(www\.)?dropbox\.com\/(scl\/fo\/|sh\/|home\/))/i.test(String(url || '').trim());
+}
+function plataformasPd2() { return plataformaPd2Actual().nombres || ['Meta']; }
+function idMaterialPlataforma(i, n) { return `pd2bulk${i}-material-${SLUG_PLATAFORMA[n] || 'otra'}`; }
+
+// Fila de material para una plataforma que no es Meta. `sola` = es la única
+// plataforma del pedido: en Oculto conserva "Subir archivo" (un archivo por
+// contenido) además del link.
+function renderMaterialOtraPlataformaV2(i, n, sola) {
+  const item = state.pd2BulkItems[i];
+  const id = idMaterialPlataforma(i, n);
+  const previo = (item.materiales && item.materiales[n]) || '';
+  if (n === 'Display') {
+    return `<textarea class="input" id="${id}" rows="2" placeholder="Link a la carpeta de Drive o Dropbox con los banners, o un link por línea (una imagen por línea)">${esc(previo.split('|').join('\n'))}</textarea>`;
+  }
+  if (state.pd2Visibilidad === 'PUBLICO') {
+    const ej = { Youtube: 'https://www.youtube.com/watch?v=...', 'Tik Tok': 'https://www.tiktok.com/@cuenta/video/...', X: 'https://x.com/cuenta/status/...' }[n] || 'https://...';
+    return `<input class="input" id="${id}" placeholder="Link de la publicación en ${esc(n)} — ${ej}" value="${esc(previo)}">`;
+  }
+  if (sola) {
+    const prefix = `pd2bulk${i}`;
+    return `
+    <div class="tabs" style="padding:0;border:none;margin-bottom:10px">
+      <button type="button" class="tab-btn ${item.modoMaterial !== 'archivo' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="link">Pegar link</button>
+      <button type="button" class="tab-btn ${item.modoMaterial === 'archivo' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="archivo">Subir archivo</button>
+    </div>
+    ${item.modoMaterial === 'archivo' ? renderMaterialArchivoBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="${n === 'Youtube' ? 'https://www.youtube.com/watch?v=... (video ya subido) o link de Drive' : 'https://drive.google.com/... o dropbox.com/...'}" value="${esc(previo)}">`}`;
+  }
+  return `<input class="input" id="${id}" placeholder="${n === 'Youtube' ? 'Link de YouTube (video ya subido) o de Drive' : 'Link de Drive o Dropbox con el material para ' + esc(n)}" value="${esc(previo)}">`;
+}
+
+// Lee el material tipeado para una plataforma que no es Meta (o el archivo
+// subido, si es la única plataforma y eligió "Subir archivo").
+function leerMaterialPlataformaV2(i, n, sola) {
+  const item = state.pd2BulkItems[i];
+  if (sola && n !== 'Display' && state.pd2Visibilidad !== 'PUBLICO') {
+    if (item.modoMaterial === 'archivo') return item.archivoSubido ? item.archivoSubido.material : '';
+    const el = document.getElementById(`pd2bulk${i}-material`);
+    return el ? el.value.trim() : '';
+  }
+  const el = document.getElementById(idMaterialPlataforma(i, n));
+  if (!el) return '';
+  return el.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).join('|');
+}
+
+// Valida el material de una plataforma que no es Meta desde el navegador
+// (misma regla que el servidor): Público → link de esa red; Oculto → link de
+// YouTube (Youtube), carpeta (Display) o archivo verificado.
+async function validarMaterialPlataformaV2(n, material) {
+  if (!material) return { ok: false, error: `Falta el material de ${n}.` };
+  if (n !== 'Display' && state.pd2Visibilidad === 'PUBLICO') {
+    return LINK_PUBLICO_PD2[n] && LINK_PUBLICO_PD2[n].test(material) ? { ok: true, detalle: 'publicación (se carga a mano)' } : { ok: false, error: `${n}: pegá el link de la publicación en ${n}.` };
+  }
+  const lista = material.split('|').map((s) => s.trim()).filter(Boolean);
+  const detalles = [];
+  for (const m of lista) {
+    if (n === 'Youtube' && LINK_PUBLICO_PD2.Youtube.test(m)) { detalles.push('video de YouTube'); continue; }
+    if (n === 'Display' && esLinkCarpetaPd2(m)) { detalles.push('carpeta'); continue; }
+    if (/^(creatividad:|uploads\/)/.test(m)) { detalles.push('archivo subido'); continue; }
+    try {
+      const r = await apiFetch('/api/material/verificar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ material: m }) });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detalle || data.error);
+      if ((n === 'Youtube' || n === 'Tik Tok') && data.tipo !== 'video') throw new Error(`${n} solo acepta video, y esto es ${data.tipo}`);
+      if (n === 'Display' && data.tipo !== 'imagen') throw new Error(`Display solo acepta imágenes o un link a carpeta, y esto es ${data.tipo}`);
+      detalles.push(data.tipo);
+    } catch (err) {
+      return { ok: false, error: `${n}: ${err.message}` };
+    }
+  }
+  return { ok: true, detalle: lista.length > 1 ? `${lista.length} materiales` : detalles[0] || 'material' };
+}
+
+function renderMaterialMetaV2(i) {
   const item = state.pd2BulkItems[i];
   const prefix = `pd2bulk${i}`;
   if (state.pd2Visibilidad === 'PUBLICO' && !activoVinculadoPd2()) {
@@ -4698,6 +4797,31 @@ function armarContextoBulkV2() {
   };
 }
 
+// Material "principal" del contenido (columna material): el de Meta si Meta
+// está entre las plataformas (carrusel / archivo / link / publicación); si
+// no, el de la primera plataforma.
+function materialMetaPiezaV2(i, item, materialCarrusel, materialInput) {
+  if (state.pd2Visibilidad === 'PUBLICO') return item.postSeleccionado ? (item.postSeleccionado.permalink || '') : (materialInput ? materialInput.value.trim() : '');
+  return materialCarrusel || (item.modoMaterial === 'archivo' && item.archivoSubido
+    ? item.archivoSubido.material
+    : (materialInput ? materialInput.value.trim() : ''));
+}
+function materialesPiezaV2(i, item, materialCarrusel, materialInput) {
+  const plats = plataformasPd2();
+  const out = {};
+  plats.forEach((n) => {
+    if (n === 'Meta') out.Meta = materialMetaPiezaV2(i, item, materialCarrusel, materialInput);
+    else out[n] = (item.materiales && item.materiales[n]) || leerMaterialPlataformaV2(i, n, plats.length === 1);
+  });
+  return out;
+}
+function materialPiezaV2(i, item, materialCarrusel, materialInput) {
+  const plats = plataformasPd2();
+  if (plats.includes('Meta')) return materialMetaPiezaV2(i, item, materialCarrusel, materialInput);
+  const m = materialesPiezaV2(i, item, materialCarrusel, materialInput);
+  return plats.map((n) => m[n]).find(Boolean) || '';
+}
+
 // El payload que espera /api/pedidos y /api/anuncios/crear-directo para UNA
 // pieza — mismo shape para validar (soloValidar, ver verificarMaterialesBulkV2)
 // y para crear de verdad (ver enviarBulkV2).
@@ -4741,9 +4865,9 @@ function armarDatosPiezaV2(i, ctx) {
     otraAudiencia: item.audienciaCodigo === 'Otra' ? (item.otraAudienciaTexto || '') : ctx.otraAudiencia,
     refuerzoAudiencia: ctx.refuerzoAudiencia,
     otrasRefuerzo: ctx.otrasRefuerzo,
-    material: materialCarrusel || (item.modoMaterial === 'archivo' && item.archivoSubido
-      ? item.archivoSubido.material
-      : (materialInput ? materialInput.value.trim() : '')),
+    material: materialPiezaV2(i, item, materialCarrusel, materialInput),
+    // Material por plataforma (varias plataformas): {Meta: ..., Youtube: ...}.
+    materiales: materialesPiezaV2(i, item, materialCarrusel, materialInput),
     materialStories: materialStoriesFinal,
     // "post" viaja tanto si se eligió de la grilla como si se resolvió desde
     // "Pegar link" (ver buscarPostPorLinkV2, en ambos casos queda en
@@ -4788,8 +4912,27 @@ async function verificarMaterialesBulkV2(ctxParam) {
   btn.textContent = 'Verificando materiales…';
 
   const previews = [];
+  const platsPreview = plataformasPd2();
+  const incluyeMetaPreview = platsPreview.includes('Meta');
   for (let i = 0; i < state.pd2BulkItems.length; i++) {
     const item = state.pd2BulkItems[i];
+    // Plataformas que no son Meta: cada una valida su material (usuario,
+    // 2026-09-15). Si alguna falla, el contenido falla; si no hay Meta, con
+    // esto alcanza.
+    item.materiales = {};
+    let errorOtra = null;
+    const detallesOtras = [];
+    for (const n of platsPreview) {
+      if (n === 'Meta') continue;
+      const mat = leerMaterialPlataformaV2(i, n, platsPreview.length === 1);
+      // eslint-disable-next-line no-await-in-loop
+      const r = await validarMaterialPlataformaV2(n, mat);
+      if (!r.ok) { errorOtra = r.error; break; }
+      item.materiales[n] = mat;
+      detallesOtras.push(`${n}: ${r.detalle}`);
+    }
+    if (errorOtra) { previews.push({ i, ok: false, error: errorOtra }); continue; }
+    if (!incluyeMetaPreview) { previews.push({ i, ok: true, tipo: detallesOtras.join(' · ') || 'material', previewUrl: '' }); continue; }
     if (state.pd2Visibilidad === 'PUBLICO' && !activoVinculadoPd2()) {
       // Página no vinculada: el link va tal cual, sin resolver contra Meta.
       const inputLink = document.getElementById('pd2bulk' + i + '-material');

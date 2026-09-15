@@ -45,6 +45,7 @@ const COLUMNAS = {
     'material_stories', 'comentarios', 'combos_excluidos', 'reparto',
     'origen', 'tareas_replicado', 'tareas_error',
     'categoria_pieza', 'gobernador',
+    'materiales',
   ],
   ingesta_sheets: ['hoja', 'fila_id', 'correlation_id', 'estado', 'error', 'procesado_en'],
   creatividades: [

@@ -5,7 +5,8 @@ const { limpiarNombreAudiencia } = require('../services/colaPautas');
 const { getCatalogoPorProyecto, usoPorProyectoCanal } = require('../services/audiencias');
 const { buscarUltimoMismoCruce } = require('../services/repartoSugerido');
 
-const MAX_AUDIENCIAS_POR_PROYECTO = 10;
+// 20 desde el 2026-09-15 (antes 10).
+const MAX_AUDIENCIAS_POR_PROYECTO = 20;
 const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config/mvp');
 const { PLATAFORMAS, MODO_POR_FORMATO, categoriasPara } = require('../config/plataformas');
 const { volumenPorProyectoDesde, filasDesde } = require('../services/codigosSheet');

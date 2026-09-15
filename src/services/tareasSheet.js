@@ -37,6 +37,15 @@ function fechaHoja(iso) {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso || '');
 }
 
+function materialDePlataforma(pauta, plataforma) {
+  try {
+    const mapa = pauta.materiales ? JSON.parse(pauta.materiales) : null;
+    const clave = String(plataforma || '').split(',')[0].trim();
+    if (mapa && mapa[clave]) return String(mapa[clave]).split('|').join('\n');
+  } catch (e) { /* JSON viejo o inválido: sigue con el general */ }
+  return pauta.material || '';
+}
+
 function armarFila(pauta, plataforma, activo, tipo) {
   const valores = {
     Fecha: fechaHoja(pauta.fecha),
@@ -64,7 +73,9 @@ function armarFila(pauta, plataforma, activo, tipo) {
     Row_ID: pauta.correlation_id || '',
     Objetivo: pauta.objetivo || '',
     'Categoría Pieza': pauta.categoria_pieza || '',
-    Material: pauta.material || '',
+    // Material de ESTA plataforma si el pedido trae uno por plataforma
+    // (cola_pautas.materiales, migración 015); si no, el general.
+    Material: materialDePlataforma(pauta, plataforma),
     Copy: pauta.copy || '',
     'Otras Audiencias': pauta.otras_audiencias || '',
     'Refuerzo de Audiencia': pauta.refuerzo_audiencia || '',

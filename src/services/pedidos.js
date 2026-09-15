@@ -26,7 +26,12 @@ const { getActivoPorKey } = require('./configActivos');
 const { insertarFilaColaPautas } = require('./colaPautasWriter');
 const { generarSiguienteCodigo } = require('./codigoGenerator');
 const { tieneAccesoAProyecto, tieneAccesoAActivo } = require('./usuarios');
-const { parsearPlataformas, combinarPlataformas, modoDelFormato, esLinkYoutube } = require('../config/plataformas');
+const { parsearPlataformas, combinarPlataformas, modoDelFormato, esLinkYoutube, getPlataforma, tienePublico, esLinkPublicacion, esLinkCarpeta } = require('../config/plataformas');
+
+// ¿El formato pedido es carrusel para ese conjunto de plataformas?
+function modeloCarrusel(comb, formato) {
+  return modoDelFormato(comb, formato) === 'carrusel';
+}
 const env = require('../config/env');
 const { procesarPedidoExistente } = require('./publicarExistente');
 const { procesarPedidoDark } = require('./crearAnuncioDark');
@@ -151,8 +156,23 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     const ultimo = await buscarUltimoMismoCruce({ activoKey, tipoCodigo, objetivos: objetivosElegidos, audiencias: audienciasCruce }).catch(() => null);
     if (ultimo && Number(ultimo.presupuesto) > 0) presupuesto = Number(ultimo.presupuesto);
   }
+  // Materiales por plataforma (usuario, 2026-09-15): con varias plataformas
+  // cada una trae su link (Público = la publicación que ya existe en esa red;
+  // Oculto = el material). Display siempre es Oculto y admite un link a
+  // carpeta de Drive/Dropbox o varias imágenes (separadas por "|" o salto de
+  // línea). Con una sola plataforma, `material` sigue valiendo como siempre.
+  const incluyeMeta = nombresPlataforma.includes('Meta');
+  const materialesPorPlataforma = {};
+  const crudos = datos.materiales && typeof datos.materiales === 'object' ? datos.materiales : {};
+  nombresPlataforma.forEach((n) => {
+    const v = String(crudos[n] || '').trim();
+    if (v) materialesPorPlataforma[n] = v.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).join('|');
+  });
+  if (nombresPlataforma.length === 1 && !materialesPorPlataforma[plataforma] && material) materialesPorPlataforma[plataforma] = String(material).trim();
+  if (incluyeMeta && !materialesPorPlataforma.Meta && material) materialesPorPlataforma.Meta = String(material).trim();
   if (!esMeta) {
-    if (visibilidad !== 'DARK') {
+    // Público existe en Meta, Youtube, Tik Tok y X; Display no (banners).
+    if (visibilidad !== 'DARK' && !nombresPlataforma.some((n) => tienePublico(n))) {
       const err = new Error(`En ${plataforma} no hay "Público" (publicación existente): la pieza se carga como anuncio nuevo (Oculto).`);
       err.status = 400;
       throw err;
@@ -180,17 +200,37 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // 2026-09-15): en Pedido Normal, un activo cuya página de Meta no está
   // vinculada a la App no puede ni listar ni resolver posteos — alcanza con
   // el link de la publicación (post.permalink); la pieza se carga a mano.
-  const postSoloLink = modoResuelto === 'normal' && !!(post && !post.id && String(post.permalink || '').trim());
-  if (visibilidad === 'PUBLICO' && !(post && post.id) && !postSoloLink) {
+  // En Pedido Normal, si Meta viene con el link de la publicación en
+  // `materiales.Meta` (varias plataformas), se toma como post solo-link.
+  let postFinal = post;
+  if (visibilidad === 'PUBLICO' && incluyeMeta && modoResuelto === 'normal' && !(post && post.id) && materialesPorPlataforma.Meta && !(post && post.permalink)) {
+    postFinal = { id: '', permalink: materialesPorPlataforma.Meta, caption: '', plataforma: /instagram\.com/i.test(materialesPorPlataforma.Meta) ? 'Instagram' : 'Facebook' };
+  }
+  const postSoloLink = modoResuelto === 'normal' && !!(postFinal && !postFinal.id && String(postFinal.permalink || '').trim());
+  if (visibilidad === 'PUBLICO' && incluyeMeta && !(postFinal && postFinal.id) && !postSoloLink) {
     const err = new Error('Para "Público" hace falta elegir una publicación real, o pegar el link del posteo si la página no está vinculada.');
     err.status = 400;
     throw err;
   }
+  if (visibilidad === 'PUBLICO' && postFinal && postFinal.permalink && !materialesPorPlataforma.Meta && incluyeMeta) materialesPorPlataforma.Meta = postFinal.permalink;
+  // Público en las otras redes: el link tiene que ser de esa red.
+  for (const n of nombresPlataforma) {
+    if (n === 'Meta' || n === 'Display') continue;
+    const m = materialesPorPlataforma[n] || '';
+    if (visibilidad === 'PUBLICO' && (!m || !esLinkPublicacion(n, m))) {
+      const err = new Error(`${n}: para "Público" pegá el link de la publicación en ${n}${m ? ` (no parece un link de ${n}: ${m.slice(0, 60)})` : ''}.`);
+      err.status = 400;
+      throw err;
+    }
+  }
 
-  const materialFinal = material || (post && post.permalink) || '';
+  // `material` (columna de siempre) = el de Meta si está, si no el de la
+  // primera plataforma; el detalle por plataforma va en `materiales`.
+  const materialFinal = materialesPorPlataforma.Meta || (postFinal && postFinal.permalink) || (nombresPlataforma.map((n) => materialesPorPlataforma[n]).find(Boolean)) || material || '';
+  const plataformasSinMaterial = nombresPlataforma.filter((n) => !materialesPorPlataforma[n] && !(n === 'Meta' && postFinal && (postFinal.id || postFinal.permalink)));
   // Público: el Copy es el texto de la publicación elegida, no algo que se
   // tipee a mano — nunca se le pide al PM/Implementador, sale del post.
-  const copyFinal = visibilidad === 'PUBLICO' ? (post && post.caption) || copy || '' : copy;
+  const copyFinal = visibilidad === 'PUBLICO' ? (postFinal && postFinal.caption) || copy || '' : copy;
   const tieneObjetivo = Array.isArray(objetivo) ? objetivo.length > 0 : !!objetivo;
 
   // Formato ya resuelto acá (no solo más abajo, para el chequeo de material)
@@ -220,6 +260,7 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   if (!tieneObjetivo) faltantes.push('Objetivo');
   if (!audienciaCodigo) faltantes.push('Audiencia');
   if (!materialFinal) faltantes.push('Material');
+  if (materialFinal && plataformasSinMaterial.length) faltantes.push(`Material de ${plataformasSinMaterial.join(' y ')}`);
   if (visibilidad === 'DARK' && !copyFinal && !copyOpcional) faltantes.push('Copy');
   if (!presupuesto) faltantes.push('Presupuesto');
   if (visibilidad === 'DARK' && !formato) faltantes.push('Formato');
@@ -242,29 +283,39 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // Carrusel: el material no es UNO, son varios separados por "|" (ver
   // metaAdapterReal.js) — se verifica cada uno por separado, no la cadena
   // entera de una (eso siempre iba a fallar: "no es un link").
-  if (visibilidad === 'DARK') {
-    const esCarrusel = esMeta ? !!(formatoInfo && formatoInfo.modo === 'carrusel') : modoDelFormato(plataformaInfo, formato) === 'carrusel';
-    const materialesAVerificar = esCarrusel
-      ? materialFinal.split('|').map((m) => m.trim()).filter(Boolean)
-      : [materialFinal];
-    for (let i = 0; i < materialesAVerificar.length; i += 1) {
-      // Youtube: el material puede ser el link del video ya subido al canal
-      // (usuario, 2026-09-15) — no es un archivo, no se verifica.
-      if (plataformaInfo.aceptaLinkYoutube && esLinkYoutube(materialesAVerificar[i])) continue;
+  // Por plataforma (usuario, 2026-09-15): cada red valida su material.
+  //  - Meta: Oculto → archivo/link (carrusel: cada imagen). Público → ya
+  //    viene la publicación.
+  //  - Youtube / Tik Tok / X: Público → link de esa red (ya validado más
+  //    arriba). Oculto → archivo (Youtube también acepta link de YouTube).
+  //  - Display: siempre Oculto; link a CARPETA de Drive/Dropbox (se acepta
+  //    tal cual) o varias imágenes, cada una verificada.
+  const esCarruselPedido = esMeta ? !!(formatoInfo && formatoInfo.modo === 'carrusel') : modeloCarrusel(plataformaInfo, formato);
+  for (const n of nombresPlataforma) {
+    const infoPlat = getPlataforma(n) || {};
+    const mat = materialesPorPlataforma[n] || '';
+    if (n !== 'Display' && visibilidad !== 'DARK') continue;
+    if (!mat) continue; // ya lo reportó "Faltan campos obligatorios"
+    const lista = (esCarruselPedido || n === 'Display') ? mat.split('|').map((m) => m.trim()).filter(Boolean) : [mat];
+    const prefijoPlat = nombresPlataforma.length > 1 ? `${n}: ` : '';
+    for (let i = 0; i < lista.length; i += 1) {
+      const m = lista[i];
+      if (n === 'Youtube' && esLinkYoutube(m)) continue;
+      if (n === 'Display' && esLinkCarpeta(m)) continue;
       try {
         // eslint-disable-next-line no-await-in-loop
-        const info = await verificarMaterial(materialesAVerificar[i]);
-        // Youtube / Tik Tok solo llevan video (ver config/plataformas.js).
-        if (plataformaInfo.soloVideo && info.tipo !== 'video') {
-          throw new Error(`${plataforma} solo acepta video, y esto es ${info.tipo}`);
-        }
+        const info = await verificarMaterial(m);
+        if (infoPlat.soloVideo && info.tipo !== 'video') throw new Error(`${n} solo acepta video, y esto es ${info.tipo}`);
+        if (n === 'Display' && info.tipo !== 'imagen') throw new Error(`Display solo acepta imágenes (o un link a carpeta), y esto es ${info.tipo}`);
       } catch (e) {
-        const prefijo = esCarrusel ? `imagen ${i + 1} del carrusel: ` : '';
-        const err = new Error(`No se puede usar ese material (${prefijo}${e.message})`);
+        const prefijo = lista.length > 1 ? `${n === 'Display' ? 'imagen' : 'imagen'} ${i + 1}: ` : '';
+        const err = new Error(`No se puede usar ese material (${prefijoPlat}${prefijo}${e.message})`);
         err.status = 400;
         throw err;
       }
     }
+  }
+  if (visibilidad === 'DARK') {
     // Material específico de Stories (opcional, solo tiene sentido con Feed
     // o Reels elegidos también) — mismo chequeo temprano que el material
     // principal, no recién al confirmar.
@@ -442,17 +493,22 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     // de opciones (nunca del body): la columna es de migration_005 y un
     // pedido normal no debe depender de que esa migración ya esté corrida.
     ...(origenResuelto ? { origen: origenResuelto } : {}),
+    // Material por plataforma (migración 015): JSON {Meta: ..., Youtube: ...}.
+    // Solo cuando aporta algo (varias plataformas o alguna que no es Meta).
+    ...(Object.keys(materialesPorPlataforma).length && (nombresPlataforma.length > 1 || !incluyeMeta) ? { materiales: JSON.stringify(materialesPorPlataforma) } : {}),
   };
   try {
     await insertarFilaColaPautas(filaNueva);
   } catch (e) {
-    // Migración 009 (categoria_pieza/gobernador) sin correr: se guarda el
-    // pedido igual, sin esos dos campos, y se avisa — un pedido no se
-    // pierde por una columna que todavía no existe (lección de la 004).
-    if (!/categoria_pieza|gobernador/.test(e.message)) throw e;
-    console.warn('[pedidos] falta correr supabase/migration_009_plataformas.sql — guardo sin categoría de pieza/gobernador:', e.message);
+    // Migración 009 (categoria_pieza/gobernador) o 015 (materiales) sin
+    // correr: se guarda el pedido igual, sin esos campos, y se avisa — un
+    // pedido no se pierde por una columna que todavía no existe (lección
+    // de la 004).
+    if (!/categoria_pieza|gobernador|materiales/.test(e.message)) throw e;
+    console.warn('[pedidos] falta correr una migración (009 categoria_pieza/gobernador o 015 materiales) — guardo sin esas columnas:', e.message);
     delete filaNueva.categoria_pieza;
     delete filaNueva.gobernador;
+    delete filaNueva.materiales;
     await insertarFilaColaPautas(filaNueva);
   }
 
@@ -490,7 +546,7 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     fechaFin,
   };
   if (visibilidad === 'PUBLICO') {
-    await procesarPedidoExistente({ ...comun, post });
+    await procesarPedidoExistente({ ...comun, post: postFinal });
   } else {
     await procesarPedidoDark({ ...comun, formato: formatoFinal, material: materialFinal, materialStories, copy: copyFinal, copyOpcional, linkDestino, redes: esMeta ? datos.redes : [], placements: esMeta ? datos.placements : [] });
   }

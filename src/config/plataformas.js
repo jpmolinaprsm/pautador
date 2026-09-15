@@ -146,4 +146,25 @@ function esLinkYoutube(url) {
   return /^https?:\/\/(www\.|m\.)?(youtube\.com\/(watch\?|shorts\/|live\/)|youtu\.be\/)/i.test(String(url || '').trim());
 }
 
-module.exports = { PLATAFORMAS, CATEGORIAS_PIEZA, MODO_POR_FORMATO, getPlataforma, parsearPlataformas, combinarPlataformas, modoDelFormato, categoriasPara, esLinkYoutube };
+// "Público" por plataforma (usuario, 2026-09-15): promocionar una publicación
+// que ya existe en esa red. Display no tiene (los banners siempre son un
+// anuncio nuevo). El link tiene que ser de la red correspondiente.
+const LINK_PUBLICO = {
+  Meta: /^https?:\/\/(www\.|m\.|business\.)?(facebook\.com|fb\.com|fb\.watch|instagram\.com)\//i,
+  Youtube: /^https?:\/\/(www\.|m\.)?(youtube\.com\/(watch\?|shorts\/|live\/)|youtu\.be\/)/i,
+  'Tik Tok': /^https?:\/\/(www\.|vm\.|vt\.)?tiktok\.com\//i,
+  X: /^https?:\/\/(www\.|mobile\.)?(x\.com|twitter\.com)\//i,
+};
+function tienePublico(nombre) { return !!LINK_PUBLICO[nombre]; }
+function esLinkPublicacion(nombre, url) {
+  const re = LINK_PUBLICO[nombre];
+  return !!re && re.test(String(url || '').trim());
+}
+
+// Link a una CARPETA de Drive o Dropbox (Display: el implementador baja las
+// piezas de ahí) — no es un archivo, no se verifica como tal.
+function esLinkCarpeta(url) {
+  return /^https?:\/\/(drive\.google\.com\/drive\/(u\/\d+\/)?folders\/|(www\.)?dropbox\.com\/(scl\/fo\/|sh\/|home\/))/i.test(String(url || '').trim());
+}
+
+module.exports = { PLATAFORMAS, CATEGORIAS_PIEZA, MODO_POR_FORMATO, getPlataforma, parsearPlataformas, combinarPlataformas, modoDelFormato, categoriasPara, esLinkYoutube, tienePublico, esLinkPublicacion, esLinkCarpeta, LINK_PUBLICO };
