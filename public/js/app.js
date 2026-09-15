@@ -2630,7 +2630,7 @@ function renderUsoPanel() {
   const cont = document.getElementById('usu-uso');
   if (!panel || !cont) return;
   const u = usuarioActual();
-  panel.hidden = !(u && u.es_superadmin);
+  if (!(u && u.es_superadmin)) { panel.hidden = true; return; }
   if (panel.hidden) return;
   if (state.usuUsoCargando) { cont.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500)">Cargando…</p>'; return; }
   if (state.usuUsoError) { cont.innerHTML = `<p class="error">${esc(state.usuUsoError)}</p>`; return; }
@@ -2655,12 +2655,30 @@ function renderUsoPanel() {
   cont.innerHTML = tarjetas + '<div style="overflow-x:auto">' + porUsuario + '</div>' + porProyecto + ultimos;
 }
 
+// Sub-pestañas del Panel Usuarios: Admin Usuarios | Proyectos | Uso (solo
+// superadmin). Cada una carga sus datos recién al entrar.
+function cambiarSubtabUsuarios(id) {
+  const yo = usuarioActual();
+  if (id === 'uso' && !(yo && yo.es_superadmin)) id = 'usuarios';
+  state.usuSubtab = id;
+  renderTabUsuarios();
+}
+
 function renderTabUsuarios() {
   const cont = document.getElementById('tab-usuarios');
   if (!cont || cont.hidden) return;
-  if (!state.usuProyectos || !state.usuProyectos.length) cargarProyectosPanel(); else renderProyectosPanel();
   const yo = usuarioActual();
-  if (yo && yo.es_superadmin && !state.usuUso && !state.usuUsoCargando && !state.usuUsoError) cargarUsoPanel(); else renderUsoPanel();
+  const yoSuper = !!(yo && yo.es_superadmin);
+  const sub = state.usuSubtab || 'usuarios';
+  document.querySelectorAll('#usu-subtabs [data-action="usu-subtab"]').forEach((b) => b.classList.toggle('active', b.dataset.id === sub));
+  const btnUso = document.getElementById('usu-subtab-uso');
+  if (btnUso) btnUso.hidden = !yoSuper;
+  document.getElementById('usu-sec-usuarios').hidden = sub !== 'usuarios';
+  document.getElementById('usu-sec-proyectos').hidden = sub !== 'proyectos';
+  document.getElementById('usu-uso-panel').hidden = !(sub === 'uso' && yoSuper);
+  if (sub === 'proyectos') { if (!state.usuProyectos || !state.usuProyectos.length) cargarProyectosPanel(); else renderProyectosPanel(); }
+  if (sub === 'uso' && yoSuper) { if (!state.usuUso && !state.usuUsoCargando && !state.usuUsoError) cargarUsoPanel(); else renderUsoPanel(); }
+  if (sub !== 'usuarios') return;
   const datos = state.usuDatos;
   const lista = document.getElementById('usu-lista');
   const detalle = document.getElementById('usu-detalle');
@@ -6041,6 +6059,7 @@ document.addEventListener('click', (e) => {
   if (action === 'pedir-asignacion') { pedirAsignacionProyectos(); return; }
   if (action === 'crea-recargar') { cargarCreatividades(); return; }
   if (action === 'usu-uso-recargar') { cargarUsoPanel(); return; }
+  if (action === 'usu-subtab') { cambiarSubtabUsuarios(id); return; }
   if (action === 'pd-csv-reintentar') { validarFilasCsv([Number(id)]); return; }
   if (action === 'elegir-usuario') { elegirUsuario(id); return; }
   if (action === 'elegir-proyecto') { elegirProyecto(id); return; }

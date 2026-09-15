@@ -474,7 +474,13 @@
   </div>
 
   <div id="tab-usuarios" style="padding:20px 28px 0" hidden>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start">
+    <!-- Sub-pestañas del Panel (usuario, 2026-09-15): Admin Usuarios | Proyectos | Uso (solo superadmin). -->
+    <div class="tabs" id="usu-subtabs" style="padding:0;border:none;margin-bottom:14px">
+      <button type="button" class="tab-btn active" data-action="usu-subtab" data-id="usuarios">Admin Usuarios</button>
+      <button type="button" class="tab-btn" data-action="usu-subtab" data-id="proyectos">Proyectos</button>
+      <button type="button" class="tab-btn" data-action="usu-subtab" data-id="uso" id="usu-subtab-uso" hidden>Uso</button>
+    </div>
+    <div id="usu-sec-usuarios" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start">
       <div class="expand-panel">
         <h5 style="margin:0 0 4px">+ Usuario por mail</h5>
         <p style="font-size:12px;color:var(--color-neutral-500);margin:0 0 14px">
@@ -494,16 +500,16 @@
     <!-- Proyectos: qué se ofrece para elegir. Sin pedidos en el último mes y
          medio → oculto, salvo que un admin lo active; un admin también puede
          desactivar cualquiera (ver services/proyectos.js). -->
-    <div class="expand-panel" style="margin-top:16px">
+    <div class="expand-panel" id="usu-sec-proyectos" hidden>
       <h5 style="margin:0 0 4px">Proyectos</h5>
       <p style="font-size:12px;color:var(--color-neutral-500);margin:0 0 12px">
-        Un proyecto sin pedidos en el último mes y medio deja de ofrecerse solo. Desde acá lo podés <strong>Activar</strong> igual, o <strong>Desactivar</strong> uno que sí tiene actividad. "Automático" vuelve a la regla.
+        Un proyecto sin pedidos en los últimos 45 días deja de ofrecerse solo. <strong>Prender</strong> lo ofrece 5 días aunque no tenga pedidos; <strong>Apagar</strong> lo esconde aunque los tenga; "Automático" vuelve a la regla. Se listan solo los Activos de la hoja Proyectos que tienen activos cargados.
       </p>
       <div id="usu-proyectos"></div>
     </div>
     <!-- Uso (solo superadmin): registro de acciones por usuario, ver
          services/eventosUso.js. -->
-    <div class="expand-panel" id="usu-uso-panel" style="margin-top:16px" hidden>
+    <div class="expand-panel" id="usu-uso-panel" hidden>
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
         <h5 style="margin:0">Uso</h5>
         <div style="display:flex;gap:8px;align-items:center">
