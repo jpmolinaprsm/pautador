@@ -1626,7 +1626,7 @@ function renderNavUsuario() {
   // "Actuar como" es una herramienta de prueba: solo el superadmin cambia
   // de usuario (usuario, 2026-09-14). El resto ve su nombre y nada más.
   const u = usuarioActual();
-  const puedeCambiar = !!(u && u.es_superadmin);
+  const puedeCambiar = puedeCambiarUsuario();
   sel.hidden = !puedeCambiar;
   const nombre = document.getElementById('usuario-actual-nombre');
   if (nombre) { nombre.hidden = puedeCambiar || !u; nombre.textContent = u ? u.nombre : ''; }
@@ -5597,7 +5597,7 @@ function renderPantallaProyecto() {
   selUsuario.innerHTML = state.usuarios.map((usr) => `<option value="${esc(usr.id)}">${esc(usr.nombre)}</option>`).join('');
   if (state.usuarioActualId) selUsuario.value = state.usuarioActualId;
   // Solo el superadmin puede "entrar como" otro (usuario, 2026-09-14).
-  document.getElementById('pantalla-proyecto-cambiar-usuario').hidden = !(u && u.es_superadmin);
+  document.getElementById('pantalla-proyecto-cambiar-usuario').hidden = !puedeCambiarUsuario();
 
   // Agrupado por Cliente (config_activos.cliente): el cliente como título y
   // debajo sus proyectos — un cliente con un solo proyecto se ve como
@@ -5785,7 +5785,23 @@ function renderNavContexto() {
   }
 }
 
+// Quién puede "actuar como" otro: el superadmin, o alguien que ya está
+// actuando como otro desde un superadmin (se recuerda en localStorage al
+// cambiar — sin esto, al entrar como un perfil sin proyectos el selector
+// desaparecía y no había forma de volver; visto 2026-09-15).
+const CLAVE_SUPERADMIN = 'pautador_superadmin_id';
+function puedeCambiarUsuario() {
+  const u = usuarioActual();
+  if (u && u.es_superadmin) return true;
+  const origen = state.usuarios.find((x) => x.id === localStorage.getItem(CLAVE_SUPERADMIN));
+  return !!(origen && origen.es_superadmin);
+}
+
 async function cambiarUsuario(id) {
+  const anterior = usuarioActual();
+  if (anterior && anterior.es_superadmin) localStorage.setItem(CLAVE_SUPERADMIN, anterior.id);
+  const nuevo = state.usuarios.find((x) => x.id === id);
+  if (nuevo && nuevo.es_superadmin) localStorage.removeItem(CLAVE_SUPERADMIN);
   state.usuarioActualId = id;
   localStorage.setItem('pautador_usuario_id', id);
   // Cambiar de usuario puede cambiar qué pestañas y qué datos se ven — se
