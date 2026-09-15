@@ -24,6 +24,9 @@ const PLATAFORMAS = [
     formatos: ['Bumper', 'Shorts', 'Video'],
     objetivos: ['Views', 'Alcance', 'Tráfico'],
     soloVideo: true,
+    // El material puede ser un link de YouTube (el video ya subido al canal):
+    // no se verifica como archivo, se acepta tal cual (usuario, 2026-09-15).
+    aceptaLinkYoutube: true,
     categoriaPor: { Bumper: ['Bumper'], Shorts: ['Video', 'Reel'], Video: ['Video'] },
     ayudaMaterial: 'Video (Bumper: 6 segundos máximo).',
   },
@@ -115,6 +118,9 @@ function combinarPlataformas(nombres) {
     objetivos, // null = los de equiv_objetivo
     requiereLink: infos.some((p) => p.requiereLink),
     soloVideo: infos.some((p) => p.soloVideo),
+    // Solo si TODAS aceptan link de YouTube (hoy: Youtube sola) — un link de
+    // YouTube no sirve como material para Meta.
+    aceptaLinkYoutube: infos.every((p) => p.aceptaLinkYoutube),
     placements: esMeta,
     medidas: infos.flatMap((p) => p.medidas || []),
     ayudaMaterial: infos.map((p) => p.ayudaMaterial).filter(Boolean).join(' '),
@@ -135,4 +141,9 @@ function categoriasPara(plataforma, formato) {
   return [...new Set(fuentes.flatMap((f) => CATEGORIAS_PIEZA[f] || []))];
 }
 
-module.exports = { PLATAFORMAS, CATEGORIAS_PIEZA, MODO_POR_FORMATO, getPlataforma, parsearPlataformas, combinarPlataformas, modoDelFormato, categoriasPara };
+// youtube.com/watch?v=…, youtu.be/…, youtube.com/shorts/… (misma regla en el front).
+function esLinkYoutube(url) {
+  return /^https?:\/\/(www\.|m\.)?(youtube\.com\/(watch\?|shorts\/|live\/)|youtu\.be\/)/i.test(String(url || '').trim());
+}
+
+module.exports = { PLATAFORMAS, CATEGORIAS_PIEZA, MODO_POR_FORMATO, getPlataforma, parsearPlataformas, combinarPlataformas, modoDelFormato, categoriasPara, esLinkYoutube };

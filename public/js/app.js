@@ -279,7 +279,9 @@ function tabsPermitidas() {
   if (!u) return [];
   const tabs = TABS_POR_ROL[u.rol] || [];
   // Biblioteca de creatividades: solo superadmin (usuario, 2026-09-14).
-  return u.es_superadmin ? [...tabs, 'creatividades'] : tabs;
+  // "Agregar Activos / Audiencias": también solo superadmin por ahora
+  // (usuario, 2026-09-15).
+  return u.es_superadmin ? [...tabs, 'creatividades'] : tabs.filter((t) => t !== 'admin');
 }
 
 // "Validación de Anuncios" es de edición para implementador/administrador,
@@ -4003,8 +4005,19 @@ function renderMaterialBulkV2(i) {
       <button type="button" class="tab-btn ${item.modoMaterial !== 'archivo' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="link">Pegar link</button>
       <button type="button" class="tab-btn ${item.modoMaterial === 'archivo' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="archivo">Subir archivo</button>
     </div>
-    ${item.modoMaterial === 'archivo' ? renderMaterialArchivoBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="https://drive.google.com/... o dropbox.com/...">`}
+    ${item.modoMaterial === 'archivo' ? renderMaterialArchivoBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="${aceptaLinkYoutubePd2() ? 'https://www.youtube.com/watch?v=... (video ya subido) o link de Drive' : 'https://drive.google.com/... o dropbox.com/...'}">`}
   `;
+}
+
+// Youtube sola: el material puede ser el link del video ya subido al canal —
+// se acepta tal cual, sin verificarlo como archivo (misma regla que
+// esLinkYoutube en src/config/plataformas.js).
+function aceptaLinkYoutubePd2() {
+  const n = plataformaPd2Actual().nombres || [];
+  return n.length === 1 && n[0] === 'Youtube';
+}
+function esLinkYoutubePd2(url) {
+  return /^https?:\/\/(www\.|m\.)?(youtube\.com\/(watch\?|shorts\/|live\/)|youtu\.be\/)/i.test(String(url || '').trim());
 }
 
 function renderMaterialArchivoBulkV2(i) {
@@ -4431,8 +4444,11 @@ function renderDistribuirPresupuestoV2(i) {
 function renderItemBulkV2(i) {
   const prefix = `pd2bulk${i}`;
   const item = state.pd2BulkItems[i];
+  // Youtube: el "Copy" es el título y la descripción del video (usuario,
+  // 2026-09-15) — en la hoja sigue yendo como Copy.
+  const esYoutube = (plataformaPd2Actual().nombres || []).includes('Youtube');
   const copyBloque = state.pd2Visibilidad === 'DARK'
-    ? `<div class="field" style="grid-column:1 / -1"><label>Copy</label><textarea class="input" id="${prefix}-copy" rows="2" placeholder="Texto del anuncio"></textarea></div>`
+    ? `<div class="field" style="grid-column:1 / -1"><label>${esYoutube ? 'Copy / Título y Descripción' : 'Copy'}</label><textarea class="input" id="${prefix}-copy" rows="2" placeholder="${esYoutube ? 'Título y descripción del video' : 'Texto del anuncio'}"></textarea></div>`
     : '';
   // Con una sola pieza, la audiencia es la general del Módulo 2 — no se
   // vuelve a pedir. Con 2 o más, cada pieza puede tener una distinta.
@@ -4742,6 +4758,10 @@ async function verificarMaterialesBulkV2(ctxParam) {
     const input = document.getElementById('pd2bulk' + i + '-material');
     const material = input ? input.value.trim() : '';
     if (!material) { previews.push({ i, ok: false, error: 'Falta el link del material.' }); continue; }
+    if (aceptaLinkYoutubePd2() && esLinkYoutubePd2(material)) {
+      previews.push({ i, ok: true, tipo: 'video', previewUrl: '', youtube: true });
+      continue;
+    }
     try {
       const r = await apiFetch('/api/material/verificar', {
         method: 'POST',

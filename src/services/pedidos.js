@@ -26,7 +26,7 @@ const { getActivoPorKey } = require('./configActivos');
 const { insertarFilaColaPautas } = require('./colaPautasWriter');
 const { generarSiguienteCodigo } = require('./codigoGenerator');
 const { tieneAccesoAProyecto, tieneAccesoAActivo } = require('./usuarios');
-const { parsearPlataformas, combinarPlataformas, modoDelFormato } = require('../config/plataformas');
+const { parsearPlataformas, combinarPlataformas, modoDelFormato, esLinkYoutube } = require('../config/plataformas');
 const env = require('../config/env');
 const { procesarPedidoExistente } = require('./publicarExistente');
 const { procesarPedidoDark } = require('./crearAnuncioDark');
@@ -248,6 +248,9 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
       ? materialFinal.split('|').map((m) => m.trim()).filter(Boolean)
       : [materialFinal];
     for (let i = 0; i < materialesAVerificar.length; i += 1) {
+      // Youtube: el material puede ser el link del video ya subido al canal
+      // (usuario, 2026-09-15) — no es un archivo, no se verifica.
+      if (plataformaInfo.aceptaLinkYoutube && esLinkYoutube(materialesAVerificar[i])) continue;
       try {
         // eslint-disable-next-line no-await-in-loop
         const info = await verificarMaterial(materialesAVerificar[i]);
@@ -623,6 +626,8 @@ async function editarPauta(correlationId, datos) {
       ? materialFinal.split('|').map((m) => m.trim()).filter(Boolean)
       : [materialFinal];
     for (let i = 0; i < materialesAVerificar.length; i += 1) {
+      // Youtube: link del video ya subido, no se verifica como archivo.
+      if (String(pauta.plataforma || '').trim() === 'Youtube' && esLinkYoutube(materialesAVerificar[i])) continue;
       try {
         // eslint-disable-next-line no-await-in-loop
         await verificarMaterial(materialesAVerificar[i]);
