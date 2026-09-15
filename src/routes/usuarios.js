@@ -36,6 +36,16 @@ router.get('/usuarios', async (req, res) => {
 // escribe el middleware de uso (services/eventosUso.js, "Entró al app").
 router.post('/uso/entrada', (req, res) => {
   if (!req.usuario) return res.status(401).json({ error: 'Sin usuario.' });
+  require('../services/eventosUso').latido(req.usuario, req.body || {});
+  res.json({ ok: true });
+});
+
+// POST /api/uso/latido — presencia en vivo: el navegador lo manda cada
+// minuto y al cambiar de pestaña, con {pantalla, proyecto, modo, canal}.
+// No se registra en la base (ver services/eventosUso.js).
+router.post('/uso/latido', (req, res) => {
+  if (!req.usuario) return res.status(401).json({ error: 'Sin usuario.' });
+  require('../services/eventosUso').latido(req.usuario, req.body || {});
   res.json({ ok: true });
 });
 

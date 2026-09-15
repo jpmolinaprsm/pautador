@@ -2543,8 +2543,8 @@ async function cargarProyectosPanel() {
 
 // Panel de Proyectos (2026-09-15): el universo es la hoja "Proyectos" de la
 // planilla de insumos (catálogo, la edita el usuario) más los que tienen
-// activos. "Prender" = visible 5 días y vuelve a la regla de 45 días;
-// "Apagar" = oculto hasta que se prenda o se pase a automático.
+// activos. "Habilitar" = visible 5 días y vuelve a la regla de 45 días;
+// "Deshabilitar" = oculto hasta que se habilite o se pase a automático.
 function renderProyectosPanel() {
   const cont = document.getElementById('usu-proyectos');
   if (!cont) return;
@@ -2583,7 +2583,7 @@ function renderProyectosPanel() {
         <div style="${fila}">${p.volumen}</div>
         <div style="${fila}">${chip} <span style="font-size:11px;color:var(--color-neutral-500)">${esc(p.motivo)}</span></div>
         <div style="padding:6px 0;border-top:1px solid var(--color-divider);display:flex;gap:6px;justify-content:flex-end">
-          ${btn('activado', 'Prender 5 días', p.estadoManual === 'activado', 'Se ofrece 5 días aunque no tenga pedidos; después vuelve a la regla de 45 días')}${btn('desactivado', 'Apagar', p.estadoManual === 'desactivado', 'No se ofrece hasta que se prenda o se pase a automático')}${btn('automatico', 'Automático', p.estadoManual === 'automatico', 'Manda la regla de 45 días')}
+          ${btn('activado', 'Habilitar 5 días', p.estadoManual === 'activado', 'Se ofrece 5 días aunque no tenga pedidos; después vuelve a la regla de 45 días')}${btn('desactivado', 'Deshabilitar', p.estadoManual === 'desactivado', 'No se ofrece hasta que se habilite o se pase a automático')}${btn('automatico', 'Automático', p.estadoManual === 'automatico', 'Manda la regla de 45 días')}
         </div>
       </div>`;
     }).join('')
@@ -2639,7 +2639,10 @@ function renderUsoPanel() {
   const fechaHora = (iso) => { const x = new Date(iso); return Number.isNaN(x.getTime()) ? String(iso || '') : x.toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
   const tarjeta = (n, label) => `<div style="padding:10px 14px;border:1px solid var(--color-divider);border-radius:var(--radius-md);min-width:120px"><div style="font-family:var(--font-heading);font-size:20px">${n}</div><div style="font-size:11px;color:var(--color-neutral-500)">${label}</div></div>`;
   const t = d.totales;
-  const tarjetas = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${tarjeta(t.usuariosHoy, 'usuarios hoy')}${tarjeta(t.usuarios7, 'usuarios 7 días')}${tarjeta(t.usuarios30, `usuarios ${d.dias} días`)}${tarjeta(t.pedidos7, 'pedidos 7 días')}${tarjeta(t.acciones7, 'acciones 7 días')}${tarjeta(t.errores7, 'errores 7 días')}</div>`;
+  const vivos = d.enVivo || [];
+  const enVivo = `<h6 style="margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--color-neutral-500)"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--color-success, #1f8a4c);margin-right:6px;vertical-align:middle"></span>En vivo ahora: ${vivos.length}</h6>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">${vivos.length ? vivos.map((v) => `<div style="padding:8px 12px;border:1px solid var(--color-success, #1f8a4c);border-radius:var(--radius-md);font-size:12px"><strong>${esc(v.nombre)}</strong> <span style="color:var(--color-neutral-500)">${esc(v.rol)}</span><br>${esc(v.pantalla || '—')}${v.proyecto ? ' · ' + esc(v.proyecto) : ''}${v.modo ? ' · ' + esc(v.modo) : ''}${v.canal ? ' · ' + esc(v.canal) : ''}<br><span style="color:var(--color-neutral-500)">hace ${v.minutos} min que entró</span></div>`).join('') : '<span style="font-size:13px;color:var(--color-neutral-500)">Nadie conectado en los últimos 2 minutos.</span>'}</div>`;
+  const tarjetas = enVivo + `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">${tarjeta(t.usuariosHoy, 'usuarios hoy')}${tarjeta(t.usuarios7, 'usuarios 7 días')}${tarjeta(t.usuarios30, `usuarios ${d.dias} días`)}${tarjeta(t.pedidos7, 'pedidos 7 días')}${tarjeta(t.acciones7, 'acciones 7 días')}${tarjeta(t.errores7, 'errores 7 días')}</div>`;
   const fila = 'padding:6px 0;border-top:1px solid var(--color-divider)';
   const porUsuario = `<h6 style="margin:10px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--color-neutral-500)">Por usuario (${d.dias} días)</h6>
     <div style="display:grid;grid-template-columns:minmax(0,1.4fr) 110px 120px 80px 80px 80px;gap:10px;font-size:13px;min-width:640px">
@@ -2677,7 +2680,11 @@ function renderTabUsuarios() {
   document.getElementById('usu-sec-proyectos').hidden = sub !== 'proyectos';
   document.getElementById('usu-uso-panel').hidden = !(sub === 'uso' && yoSuper);
   if (sub === 'proyectos') { if (!state.usuProyectos || !state.usuProyectos.length) cargarProyectosPanel(); else renderProyectosPanel(); }
-  if (sub === 'uso' && yoSuper) { if (!state.usuUso && !state.usuUsoCargando && !state.usuUsoError) cargarUsoPanel(); else renderUsoPanel(); }
+  if (sub === 'uso' && yoSuper) {
+    if (!state.usuUso && !state.usuUsoCargando && !state.usuUsoError) cargarUsoPanel(); else renderUsoPanel();
+    // "En vivo" se refresca solo cada 30 s mientras la pestaña Uso está abierta.
+    if (!state.usuUsoTimer) state.usuUsoTimer = setInterval(() => { const p = document.getElementById('usu-uso-panel'); if (p && !p.hidden && state.tabActiva === 'usuarios' && !state.usuUsoCargando) cargarUsoPanel(); }, 30 * 1000);
+  }
   if (sub !== 'usuarios') return;
   const datos = state.usuDatos;
   const lista = document.getElementById('usu-lista');
@@ -5341,6 +5348,7 @@ function cambiarTab(tab) {
   if (tab === 'admin') { if (!state.admActivosCargados) cargarDatosAdmin(); else renderTabAdmin(); }
   if (tab === 'usuarios') cargarPanelUsuarios();
   if (tab === 'creatividades') { if (!state.creaDatos) cargarCreatividades(); else renderTabCreatividades(); }
+  if (typeof mandarLatido === 'function') mandarLatido();
   render();
 }
 
@@ -5574,8 +5582,24 @@ async function entrarAlApp() {
   if (!permitidas.includes(state.tabActiva)) state.tabActiva = permitidas[0] || 'pendientes';
   // Registro de uso: "Entró al app" con proyecto/modo/canal (lo anota el
   // servidor; si falla no pasa nada).
-  apiFetch('/api/uso/entrada', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proyecto: state.proyectoActivo, modo: state.modoActivo, canal: state.ecosistemaActivo }) }).catch(() => {});
+  apiFetch('/api/uso/entrada', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proyecto: state.proyectoActivo, modo: state.modoActivo, canal: state.ecosistemaActivo, pantalla: NOMBRE_PANTALLA[state.tabActiva] || state.tabActiva }) }).catch(() => {});
   cambiarTab(state.tabActiva);
+  arrancarLatido();
+}
+
+// Presencia en vivo (Panel Usuarios → Uso, "En vivo"): un latido por minuto
+// mientras la pestaña del navegador está visible, y otro al cambiar de
+// pestaña del app. Lo guarda el servidor en memoria, no en la base.
+const NOMBRE_PANTALLA = { pedido2: 'Pedido de Anuncios', pendientes: 'Historial', admin: 'Agregar Activos', usuarios: 'Panel Usuarios', creatividades: 'Creatividades' };
+function mandarLatido() {
+  if (!state.usuarioActualId || document.visibilityState !== 'visible' || pantallaActual() !== 'app') return;
+  apiFetch('/api/uso/latido', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pantalla: NOMBRE_PANTALLA[state.tabActiva] || state.tabActiva || '', proyecto: state.proyectoActivo, modo: state.modoActivo, canal: state.ecosistemaActivo }) }).catch(() => {});
+}
+let latidoTimer = null;
+function arrancarLatido() {
+  if (latidoTimer) return;
+  latidoTimer = setInterval(mandarLatido, 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') mandarLatido(); });
 }
 
 // Proyectos disponibles + (Implementador y Administrador, que son quienes

@@ -24,7 +24,7 @@ const TABLAS = [
   ['escala_presupuestos', 'Presupuesto por tamaño de audiencia × intensidad del tipo.', (r) => [r.intensidad, r['tamaño']]],
   ['usuarios', 'Usuarios de PAUTADOR: rol, superadmin, habilitado. Los sin mail son de demo.', (r) => [r.rol, r.nombre]],
   ['usuario_accesos', 'Proyectos (y activos) que ve cada PM/implementador. activo_key vacío = todos los activos del proyecto.', (r) => [r.usuario_id, r.proyecto]],
-  ['proyectos_estado', 'Prendido/apagado a mano por un admin (Panel Usuarios → Proyectos). Sin fila = automático por actividad.', (r) => [r.proyecto]],
+  ['proyectos_estado', 'Habilitado/deshabilitado a mano por un admin (Panel Usuarios → Proyectos). Sin fila = automático por actividad.', (r) => [r.proyecto]],
   ['campanas_meta', 'Campañas ya creadas en Meta por activo × eje × objetivo (se reutilizan).', (r) => [r.activo_key, r.eje, r.objetivo]],
   ['eventos_uso', 'Registro de uso: quién hizo qué, cuándo y cómo salió (últimos 90 días).', (r) => [r.fecha], { filtro: (r) => r.fecha >= new Date(Date.now() - 90 * 86400000).toISOString(), desc: true }],
 ];

@@ -79,8 +79,8 @@ async function resumenProyectos() {
     let visible; let motivo;
     if (cat && !cat.activo) { visible = false; motivo = 'Inactivo en la hoja Proyectos'; }
     else if (!tieneActivos) { visible = false; motivo = 'Sin activos cargados (Agregar Activos / Audiencias)'; }
-    else if (estadoManual === 'desactivado') { visible = false; motivo = 'Apagado por ' + (e.modificado_por || 'un administrador'); }
-    else if (estadoManual === 'activado') { visible = true; motivo = 'Prendido por ' + (e.modificado_por || 'un administrador') + (activadoHasta ? ' hasta el ' + activadoHasta.slice(0, 10) : ''); }
+    else if (estadoManual === 'desactivado') { visible = false; motivo = 'Deshabilitado por ' + (e.modificado_por || 'un administrador'); }
+    else if (estadoManual === 'activado') { visible = true; motivo = 'Habilitado por ' + (e.modificado_por || 'un administrador') + (activadoHasta ? ' hasta el ' + activadoHasta.slice(0, 10) : ''); }
     else if (activoPorUso) { visible = true; motivo = ultimaFecha ? 'Con pedidos (último: ' + ultimaFecha + ')' : 'Sin regla de actividad'; }
     else { visible = false; motivo = ultimaFecha ? 'Sin pedidos desde ' + ultimaFecha : 'Sin pedidos en la hoja'; }
     return {

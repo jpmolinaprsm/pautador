@@ -27,7 +27,7 @@ const ETIQUETAS = [
   [/^POST \/historial\/[^/]+\/pautado$/, 'Marcó pautado'],
   [/^POST \/admin\/usuarios$/, 'Alta de usuario'],
   [/^PUT \/admin\/usuarios\/[^/]+$/, 'Editó usuario/accesos'],
-  [/^PUT \/admin\/proyectos\/[^/]+$/, 'Prendió/apagó proyecto'],
+  [/^PUT \/admin\/proyectos\/[^/]+$/, 'Habilitó/deshabilitó proyecto'],
   [/^POST \/activos$/, 'Alta de activo'],
   [/^POST \/audiencias$/, 'Alta de audiencia'],
   [/^POST \/usuarios\/pedir-asignacion$/, 'Pidió asignación de proyectos'],
@@ -37,7 +37,7 @@ const ETIQUETAS = [
 ];
 // Ruido que no vale la pena guardar (validaciones y previews).
 // (el login lo registra auth.js con el usuario resuelto — acá no hay header)
-const IGNORAR = [/^POST \/pedidos\/validar-lote$/, /^POST \/material\/verificar$/, /^POST \/publicaciones\/resolver$/, /^POST \/auth\/login$/];
+const IGNORAR = [/^POST \/pedidos\/validar-lote$/, /^POST \/material\/verificar$/, /^POST \/publicaciones\/resolver$/, /^POST \/auth\/login$/, /^POST \/uso\/latido$/];
 
 let avisado = false;
 async function registrar(evento) {
@@ -115,6 +115,37 @@ function registrarRequests(req, res, next) {
   next();
 }
 
+// ---------- Presencia en vivo ----------
+// El navegador manda un latido cada minuto (y al cambiar de pestaña) con
+// dónde está: pantalla/pestaña, proyecto, modo, canal. Se guarda en memoria
+// (no en la base: es ruido) y se considera "en vivo" a quien latió en los
+// últimos PRESENCIA_VIVO_MS. Con un solo proceso en Railway alcanza.
+const PRESENCIA_VIVO_MS = 2 * 60 * 1000;
+const presencia = new Map(); // usuario_id -> { usuario_id, nombre, rol, desde, ultimo, pantalla, proyecto, modo, canal }
+
+function latido(usuario, datos = {}) {
+  if (!usuario || !usuario.id) return;
+  const ahora = Date.now();
+  const previo = presencia.get(usuario.id);
+  const vivo = previo && ahora - previo.ultimo < PRESENCIA_VIVO_MS;
+  presencia.set(usuario.id, {
+    usuario_id: usuario.id, nombre: usuario.nombre || usuario.id, rol: usuario.rol || '',
+    desde: vivo ? previo.desde : ahora, ultimo: ahora,
+    pantalla: String(datos.pantalla || '').slice(0, 60), proyecto: String(datos.proyecto || '').slice(0, 120),
+    modo: String(datos.modo || '').slice(0, 20), canal: String(datos.canal || '').slice(0, 20),
+  });
+  // Limpieza: los que llevan más de un día sin latir se sacan del mapa.
+  presencia.forEach((p, k) => { if (ahora - p.ultimo > 24 * 60 * 60 * 1000) presencia.delete(k); });
+}
+
+function enVivo() {
+  const ahora = Date.now();
+  return [...presencia.values()]
+    .filter((p) => ahora - p.ultimo < PRESENCIA_VIVO_MS)
+    .sort((a, b) => b.ultimo - a.ultimo)
+    .map((p) => ({ ...p, desde: new Date(p.desde).toISOString(), ultimo: new Date(p.ultimo).toISOString(), minutos: Math.round((ahora - p.desde) / 60000) }));
+}
+
 // Resumen para Panel Usuarios → Uso (superadmin). dias: ventana.
 async function resumenUso(dias = 30) {
   const desde = new Date(Date.now() - dias * 86400000).toISOString();
@@ -141,6 +172,7 @@ async function resumenUso(dias = 30) {
   todos.filter((e) => e.proyecto && /Pedido/.test(e.accion || '') && e.resultado === 'ok').forEach((e) => { porProyecto[e.proyecto] = (porProyecto[e.proyecto] || 0) + 1; });
   return {
     dias,
+    enVivo: enVivo(),
     totales: {
       usuariosHoy: usuariosDe(hoy), usuarios7: usuariosDe(hace7), usuarios30: usuariosDe(desde),
       acciones7: todos.filter((e) => e.fecha >= hace7).length,
@@ -154,4 +186,4 @@ async function resumenUso(dias = 30) {
   };
 }
 
-module.exports = { registrar, registrarRequests, resumenUso };
+module.exports = { registrar, registrarRequests, resumenUso, latido, enVivo };
