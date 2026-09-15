@@ -17,7 +17,10 @@ async function procesarPedidoExistente(datos) {
     fechaInicio, fechaFin,
   } = datos;
 
-  if (!correlationId || !post || !post.id) {
+  // post.id puede venir vacío cuando la página no está vinculada a la App y
+  // el PM solo pegó el link del posteo (Pedido Normal, ver crearPedido) —
+  // queda el link como material y post_id vacío; la pieza se carga a mano.
+  if (!correlationId || !post || !(post.id || String(post.permalink || '').trim())) {
     const err = new Error('Faltan el pedido o la publicación elegida.');
     err.status = 400;
     throw err;
@@ -49,7 +52,7 @@ async function procesarPedidoExistente(datos) {
     refuerzo_audiencia: refuerzoAudiencia || '',
     material: post.permalink || pedido.material,
     copy: post.caption || pedido.copy,
-    post_id: post.id,
+    post_id: post.id || '',
     presupuesto: Number(presupuesto) || 0,
     fecha_inicio: fechaInicio || pedido.fecha_inicio || hoy,
     fecha_fin: fechaFin || pedido.fecha_fin || '',

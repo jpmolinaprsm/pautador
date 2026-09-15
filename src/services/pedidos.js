@@ -176,8 +176,13 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // Público SIEMPRE necesita una publicación real elegida del picker — nadie
   // más va a "arreglarlo" después, la pieza entra directo a Validación con
   // lo que se cargó acá.
-  if (visibilidad === 'PUBLICO' && !(post && post.id)) {
-    const err = new Error('Para "Público" hace falta elegir una publicación real (no alcanza con pegar un link).');
+  // Público: hace falta la publicación real (post.id). Excepción (usuario,
+  // 2026-09-15): en Pedido Normal, un activo cuya página de Meta no está
+  // vinculada a la App no puede ni listar ni resolver posteos — alcanza con
+  // el link de la publicación (post.permalink); la pieza se carga a mano.
+  const postSoloLink = modoResuelto === 'normal' && !!(post && !post.id && String(post.permalink || '').trim());
+  if (visibilidad === 'PUBLICO' && !(post && post.id) && !postSoloLink) {
+    const err = new Error('Para "Público" hace falta elegir una publicación real, o pegar el link del posteo si la página no está vinculada.');
     err.status = 400;
     throw err;
   }

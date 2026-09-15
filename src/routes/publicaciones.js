@@ -75,6 +75,10 @@ router.get('/activos', async (req, res) => {
       activo_key: a.activo_key,
       proyecto: a.proyecto,
       activo: a.activo || a.activo_key,
+      // Página de Meta vinculada a la App (credenciales + page_id): sin esto
+      // no se pueden listar ni resolver publicaciones — en "Público" solo se
+      // pide el link del posteo (usuario, 2026-09-15).
+      vinculado: a.activo_habilitado === true && /^\d+$/.test(String(a.page_id || '').trim()),
     })));
   } catch (err) {
     console.error('[activos]', err.message);

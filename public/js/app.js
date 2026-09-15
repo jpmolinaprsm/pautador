@@ -821,7 +821,7 @@ async function confirmBatch() {
 async function desestimarBatch() {
   const motivo = document.getElementById('batch-desestimar-motivo').value.trim();
   if (motivo.length < 5) {
-    state.batchDesestimarError = 'Escribí el motivo — se aplica a todas las piezas seleccionadas.';
+    state.batchDesestimarError = 'Escribí el motivo — se aplica a todos los contenidos seleccionados.';
     render();
     return;
   }
@@ -1290,7 +1290,7 @@ function avisoMinimo(vm) {
     <div style="margin-top:12px;padding:10px 12px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);font-size:12px;color:var(--color-neutral-300)">
       <strong>${flojas} ${flojas === 1 ? 'conjunto queda' : 'conjuntos quedan'} bajo el mínimo de Meta.</strong>
       Para ${vm.diasDuracion} día(s) de duración, Meta pide más de ${esc(vm.minPorConjuntoLabel)} <em>por conjunto</em> (cada celda es un conjunto).
-      Si confirmás así, Meta va a rechazar ${flojas === 1 ? 'esa celda' : 'esas celdas'}: subí el presupuesto de la pieza, acortá la duración, o concentrá el reparto en menos celdas.
+      Si confirmás así, Meta va a rechazar ${flojas === 1 ? 'esa celda' : 'esas celdas'}: subí el presupuesto del contenido, acortá la duración, o concentrá el reparto en menos celdas.
     </div>`;
 }
 
@@ -1400,7 +1400,7 @@ function renderExpandContent(vm) {
       + '<div style="font-family:var(--font-heading);margin-bottom:6px">Devuelta para corrección</div>'
       + '<div style="font-size:13px;color:var(--color-neutral-300)">' + esc(vm.motivoDesestimacion || '(sin motivo registrado)') + '</div>'
       + '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:8px">' + esc([vm.desestimadoPor, vm.desestimadoEn].filter(Boolean).join(' · ')) + '</div>'
-      + (vm.puedeEditarPauta && !editarAbierto ? '<div style="margin-top:10px"><button class="btn btn-primary" data-action="editarpauta-abrir" data-id="' + esc(vm.id) + '">Corregir esta pieza</button></div>' : '')
+      + (vm.puedeEditarPauta && !editarAbierto ? '<div style="margin-top:10px"><button class="btn btn-primary" data-action="editarpauta-abrir" data-id="' + esc(vm.id) + '">Corregir este contenido</button></div>' : '')
       + '</div>';
   // PM/Cuentas ve "Validación de Anuncios" en solo lectura — nada de chips,
   // sliders ni botones de confirmar/marcar manual, solo el estado propuesto
@@ -1438,7 +1438,7 @@ function renderExpandContent(vm) {
       <div style="display:flex;justify-content:space-between;align-items:center;background:var(--color-bg);border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;gap:16px">
         <div>
           <div style="font-family:var(--font-heading);margin-bottom:2px">Audiencia "Otra" — ${esc(vm.audienciaOtraTexto)}</div>
-          <div style="font-size:12px;color:var(--color-neutral-500)">Sin ID de Meta. Esta pieza se crea a mano; no puede publicarse desde acá.</div>
+          <div style="font-size:12px;color:var(--color-neutral-500)">Sin ID de Meta. Este contenido se crea a mano; no puede publicarse desde acá.</div>
         </div>
         <button class="btn btn-secondary" data-action="mark-manual" data-id="${vm.id}" style="flex:none" ${marcando ? 'disabled' : ''}>${marcando ? '<span class="spinner-inline"></span>Marcando…' : 'Marcar hecha a mano'}</button>
       </div>`;
@@ -1494,7 +1494,7 @@ function renderDesestimarPanel(vm, abierto) {
     : '';
   return '<div style="margin-bottom:16px;border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px" data-action="stop-prop">'
     + '<div style="font-family:var(--font-heading);margin-bottom:4px">¿Qué hacemos con este pedido?</div>'
-    + '<div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px">El motivo queda guardado en la pieza — es lo que va a leer quien corresponda.</div>'
+    + '<div style="font-size:12px;color:var(--color-neutral-500);margin-bottom:8px">El motivo queda guardado en el contenido — es lo que va a leer quien corresponda.</div>'
     + '<textarea class="input" id="motivo-' + esc(vm.id) + '" rows="2" placeholder="Ej: el link del material no abre / la campaña se cayó / duplicada con ' + esc(vm.codigo) + '"></textarea>'
     + (err ? '<div class="error" style="margin-top:6px">' + esc(err) + '</div>' : '')
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px">'
@@ -1551,7 +1551,7 @@ function renderEditarModal() {
   panel.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:18px">'
     +   '<div style="display:flex;gap:14px;align-items:center">'
     +     preview
-    +     '<div><h4 style="margin:0 0 4px">Corregir pieza</h4>' + (c.codigo ? '<div style="font-family:monospace;font-size:12px;color:var(--color-neutral-500)">' + esc(c.codigo) + '</div>' : '') + '</div>'
+    +     '<div><h4 style="margin:0 0 4px">Corregir contenido</h4>' + (c.codigo ? '<div style="font-family:monospace;font-size:12px;color:var(--color-neutral-500)">' + esc(c.codigo) + '</div>' : '') + '</div>'
     +   '</div>'
     +   '<button type="button" class="btn btn-icon btn-ghost" data-action="editarpauta-cancelar"><i class="ph ph-x"></i></button>'
     + '</div>'
@@ -1718,7 +1718,7 @@ function render() {
   const filasPendientes = pendientes.reduce((acc, vm) => acc.concat(splitVMSiMixto(vm)), []);
   document.getElementById('lista-pendientes').innerHTML = filasPendientes.length
     ? filasPendientes.map((vm) => renderItemRow(vm, COLS_PENDIENTES, false)).join('')
-    : '<p style="color:var(--color-neutral-500);padding:16px 10px">No hay piezas pendientes. Las que se carguen desde "Pedido de Anuncios" aparecen acá.</p>';
+    : '<p style="color:var(--color-neutral-500);padding:16px 10px">No hay contenidos pendientes. Las que se carguen desde "Pedido de Anuncios" aparecen acá.</p>';
 
   renderHistorialSheet(vms);
 
@@ -1737,17 +1737,17 @@ function render() {
     const btn = document.getElementById('batch-confirm');
     btn.textContent = state.batchConfirmando
       ? 'Confirmando…'
-      : 'Confirmar ' + selectedIds.length + ' pieza' + (selectedIds.length > 1 ? 's' : '');
+      : 'Confirmar ' + selectedIds.length + ' contenido' + (selectedIds.length > 1 ? 's' : '');
     btn.disabled = state.batchConfirmando || readyCount !== selectedIds.length;
   }
   if (hayAlgoSeleccionado && state.batchDesestimarAbierto) {
     document.getElementById('batch-desestimar-count').textContent =
-      selectedIds.length + ' pieza' + (selectedIds.length > 1 ? 's' : '');
+      selectedIds.length + ' contenido' + (selectedIds.length > 1 ? 's' : '');
     const btnD = document.getElementById('batch-desestimar-confirmar');
     btnD.disabled = state.batchDesestimarEnviando;
     btnD.textContent = state.batchDesestimarEnviando
       ? 'Desestimando…'
-      : 'Desestimar ' + selectedIds.length + ' pieza' + (selectedIds.length > 1 ? 's' : '');
+      : 'Desestimar ' + selectedIds.length + ' contenido' + (selectedIds.length > 1 ? 's' : '');
     document.getElementById('batch-desestimar-error').hidden = !state.batchDesestimarError;
     document.getElementById('batch-desestimar-error').textContent = state.batchDesestimarError || '';
   }
@@ -1953,7 +1953,7 @@ function renderAvisoOtraV2() {
   el.innerHTML = `<div style="padding:10px 12px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);font-size:12px;color:var(--color-neutral-300)">
       <i class="ph ph-hand"></i> <strong>La audiencia "Otra" no está automatizada.</strong>
       ${soloOtra
-    ? 'El pedido se carga igual, pero esta pieza no sale sola: la cargan a mano los implementadores en Meta y queda en Pendientes hasta que la marquen hecha.'
+    ? 'El pedido se carga igual, pero este contenido no sale solo: la cargan a mano los implementadores en Meta y queda en Pendientes hasta que la marquen hecha.'
     : 'Los cruces con las otras audiencias salen solos; el cruce con "Otra" lo cargan a mano los implementadores y queda en Pendientes hasta que lo marquen hecho.'}
     </div>`;
 }
@@ -2041,7 +2041,7 @@ function evaluarSpecsPieza({ placements, modo, esVideo, conLink, medidas }) {
   const lista = (medidas || []).filter((m) => m && m.width && m.height);
   const fmt = (m) => m.width + '×' + m.height;
   if (!lista.length) {
-    avisos.push('No pude medir esta pieza desde acá — Meta la va a revisar al confirmar (Stories/Reels piden 9:16; Feed 1:1 o 4:5).');
+    avisos.push('No pude medir este contenido desde acá — Meta la va a revisar al confirmar (Stories/Reels piden 9:16; Feed 1:1 o 4:5).');
     return { bloqueos, avisos };
   }
   const m = lista[0];
@@ -2053,19 +2053,19 @@ function evaluarSpecsPieza({ placements, modo, esVideo, conLink, medidas }) {
   if (modo === 'carrusel') {
     const ratios = lista.map((x) => x.width / x.height);
     if (ratios.some((r) => Math.abs(r - ratios[0]) > TOLERANCIA_PROPORCION_UI)) {
-      bloqueos.push('Carrusel: todas las piezas tienen que tener la misma proporción (hoy: ' + lista.map(fmt).join(', ') + ').');
+      bloqueos.push('Carrusel: todas las imágenes tienen que tener la misma proporción (hoy: ' + lista.map(fmt).join(', ') + ').');
     }
-    if (esVideo && !es('1:1')) bloqueos.push('Carrusel de video: Meta solo acepta 1:1 (1080×1080). Esta pieza es ' + fmt(m) + '.');
-    else if (!es('1:1')) avisos.push('Carrusel en pauta va 1:1 (1080×1080) porque lleva link. Esta pieza es ' + fmt(m) + '.');
+    if (esVideo && !es('1:1')) bloqueos.push('Carrusel de video: Meta solo acepta 1:1 (1080×1080). Este contenido es ' + fmt(m) + '.');
+    else if (!es('1:1')) avisos.push('Carrusel en pauta va 1:1 (1080×1080) porque lleva link. Este contenido es ' + fmt(m) + '.');
     return { bloqueos, avisos };
   }
 
-  if (tieneStories && !es('9:16')) bloqueos.push('Stories pide 9:16 (1080×1920). Esta pieza es ' + fmt(m) + (m.height > m.width ? '' : ', no es vertical') + '.');
-  if (tieneReels && !es('9:16')) bloqueos.push('Reels pide 9:16 (1080×1920). Esta pieza es ' + fmt(m) + '.');
+  if (tieneStories && !es('9:16')) bloqueos.push('Stories pide 9:16 (1080×1920). Este contenido es ' + fmt(m) + (m.height > m.width ? '' : ', no es vertical') + '.');
+  if (tieneReels && !es('9:16')) bloqueos.push('Reels pide 9:16 (1080×1920). Este contenido es ' + fmt(m) + '.');
   if (tieneStories && es('9:16')) avisos.push('Stories: dejá libre el 14% de arriba (~250 px) y el 20% de abajo (~350 px) — ahí Meta pone el nombre y los botones.');
   if (tieneReels && es('9:16')) avisos.push('Reels: dejá libre 14% arriba, 40% abajo y 6% de cada lado. Si además sale en Feed se recorta a 4:5: lo importante, centrado.');
   if (tieneFeed) {
-    if (!es('1:1') && !es('4:5')) avisos.push('Feed recomienda 1:1 (1080×1080) o 4:5 (1080×1350). Esta pieza es ' + fmt(m) + ' — Meta la va a reencuadrar.');
+    if (!es('1:1') && !es('4:5')) avisos.push('Feed recomienda 1:1 (1080×1080) o 4:5 (1080×1350). Este contenido es ' + fmt(m) + ' — Meta la va a reencuadrar.');
     else if (es('4:5') && conLink) avisos.push('4:5 con link suele traer problemas con el botón (CTA) — con link el equipo recomienda 1:1 (1080×1080).');
   }
   return { bloqueos, avisos };
@@ -3123,7 +3123,7 @@ function renderCsvUI() {
 
   wrapPreview.innerHTML = ''
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;flex-wrap:wrap">'
-    +   '<strong style="font-family:var(--font-heading);font-size:14px">' + total + ' pieza(s)'
+    +   '<strong style="font-family:var(--font-heading);font-size:14px">' + total + ' contenido(s)'
     +     (creadas ? ' — ' + creadas + ' creada(s)' : '') + ' — ' + ok + ' lista(s) para crear</strong>'
     +   '<button type="button" class="btn btn-primary" data-action="pd-csv-confirmar" ' + (!ok || state.pdCsvCreando ? 'disabled' : '') + '>'
     +     (state.pdCsvCreando ? 'Creando…' : 'Confirmar carga (' + ok + ')') + '</button>'
@@ -3236,6 +3236,9 @@ async function cambiarActivoPd2(valor) {
   state.pd2ActivoKey = valor;
   state.pd2Posts = [];
   await cargarAudienciasPorActivo(valor);
+  // En "Público" el bloque de Material depende del activo (página vinculada
+  // o no, ver renderMaterialBulkV2): se vuelve a armar al cambiarlo.
+  if (state.pd2Visibilidad === 'PUBLICO') reiniciarMaterialesPiezasV2();
   renderTabPedido2();
   actualizarPresupuestoPreviewPd2();
 }
@@ -3243,7 +3246,16 @@ async function cambiarActivoPd2(valor) {
 // Publicaciones recientes del activo — usadas por el selector "Elegir
 // publicación" de cada pieza (ver renderSelectorPostsBulkV2), una sola
 // carga compartida por todas las piezas de la tanda.
+// ¿El activo elegido tiene su página de Meta vinculada a la App? Sin eso
+// no se pueden listar ni resolver publicaciones: en "Público" solo se pide
+// el link del posteo (usuario, 2026-09-15). Sin dato, se asume que sí.
+function activoVinculadoPd2() {
+  const a = (state.pdActivos || []).find((x) => x.activo_key === state.pd2ActivoKey);
+  return !a || a.vinculado !== false;
+}
+
 async function cargarPostsPedidoV2() {
+  if (!activoVinculadoPd2()) { state.pd2Posts = []; return; }
   state.pd2CargandoPosts = true;
   const r = await apiFetch(`/api/publicaciones?activo_key=${encodeURIComponent(state.pd2ActivoKey || '')}`);
   state.pd2Posts = r.ok ? await r.json() : [];
@@ -3963,6 +3975,14 @@ function confirmarPlataformasPd2() {
 function renderMaterialBulkV2(i) {
   const item = state.pd2BulkItems[i];
   const prefix = `pd2bulk${i}`;
+  if (state.pd2Visibilidad === 'PUBLICO' && !activoVinculadoPd2()) {
+    // Página no vinculada a la App: ni grilla de posteos ni resolución
+    // contra Meta — solo el link, y la pieza se carga a mano.
+    return `
+      <label style="font-size:12px;color:var(--color-neutral-500);display:block;margin-bottom:6px">Link de la publicación <span style="font-weight:400">(esta página no está vinculada a la App: la pieza se carga a mano)</span></label>
+      <input class="input" id="${prefix}-material" placeholder="https://www.facebook.com/... o instagram.com/p/...">
+    `;
+  }
   if (state.pd2Visibilidad === 'PUBLICO') {
     return `
       <div class="tabs" style="padding:0;border:none;margin-bottom:10px">
@@ -4441,7 +4461,7 @@ function renderItemBulkV2(i) {
 
   return `
     <div class="card" style="gap:12px">
-      <div class="card-title">Pieza N°${i + 1}</div>
+      <div class="card-title" style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">Contenido N°${i + 1} <span id="${prefix}-nombre" style="font-weight:400;font-size:12px;color:var(--color-neutral-500)" title="Así se va a llamar este contenido (Campaña, Línea y Formato)">${esc(nombreContenidoV2(i))}</span></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
         <div class="field"><label>Línea <span style="font-weight:400;color:var(--color-neutral-500)">(opcional)</span></label><input class="input" id="${prefix}-linea"></div>
         ${audienciaBloque}
@@ -4453,6 +4473,28 @@ function renderItemBulkV2(i) {
       <div id="${prefix}-reparto-wrap" hidden></div>
       <div id="${prefix}-aviso-presupuesto" hidden></div>
     </div>`;
+}
+
+// Nombre con el que va a quedar el contenido (usuario, 2026-09-15: "que el
+// nombre del contenido acompañe la creación"): la misma fórmula que arma el
+// servidor en crearPedido — Campaña, Línea entre comillas si hay, y el
+// Formato entre paréntesis. Se muestra al lado del título de cada tarjeta
+// y se actualiza al tipear Campaña/Línea o cambiar el Formato.
+function nombreContenidoV2(i) {
+  const campanaEl = document.getElementById('pd2-campana');
+  const lineaEl = document.getElementById(`pd2bulk${i}-linea`);
+  const formatoEl = document.getElementById('pd2-formato');
+  const campana = (campanaEl ? campanaEl.value : '').trim();
+  const linea = (lineaEl ? lineaEl.value : '').trim();
+  const formato = state.pd2Visibilidad === 'PUBLICO' ? 'Publicación' : ((formatoEl && formatoEl.value) || '').trim();
+  return `${campana || 'Campaña'}${linea ? ` "${linea}"` : ''}${formato ? ` (${formato})` : ''}`;
+}
+
+function actualizarNombresContenidoV2() {
+  (state.pd2BulkItems || []).forEach((item, i) => {
+    const el = document.getElementById(`pd2bulk${i}-nombre`);
+    if (el) el.textContent = nombreContenidoV2(i);
+  });
 }
 
 // Recalcula, para todas las piezas, el panel de reparto y el aviso de
@@ -4489,7 +4531,7 @@ function renderAvisoPresupuestoV2() {
       algunaFalla = true;
       el.innerHTML = `
         <div style="padding:10px 12px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);font-size:12px;color:var(--color-neutral-300)">
-          <strong>Pieza ${i + 1}: el presupuesto no alcanza para el mínimo de Meta.</strong>
+          <strong>Contenido ${i + 1}: el presupuesto no alcanza para el mínimo de Meta.</strong>
           Son ${falta.conjuntos} conjunto(s) de anuncios × ${falta.dias} día(s), y Meta pide más de
           <strong>${fmtMoney(falta.minPorConjunto)} por conjunto</strong> → hacen falta al menos
           <strong>${fmtMoney(falta.minTotal)}</strong> y hay ${fmtMoney(falta.presupuesto)}.
@@ -4635,6 +4677,19 @@ async function verificarMaterialesBulkV2(ctxParam) {
   const previews = [];
   for (let i = 0; i < state.pd2BulkItems.length; i++) {
     const item = state.pd2BulkItems[i];
+    if (state.pd2Visibilidad === 'PUBLICO' && !activoVinculadoPd2()) {
+      // Página no vinculada: el link va tal cual, sin resolver contra Meta.
+      const inputLink = document.getElementById('pd2bulk' + i + '-material');
+      const link = inputLink ? inputLink.value.trim() : '';
+      if (!/^https?:\/\//i.test(link)) {
+        item.postSeleccionado = null;
+        previews.push({ i, ok: false, error: 'Pegá el link de la publicación (empieza con https://).' });
+        continue;
+      }
+      item.postSeleccionado = { id: '', permalink: link, caption: '', imagen: '', plataforma: /instagram\.com/i.test(link) ? 'Instagram' : 'Facebook' };
+      previews.push({ i, ok: true, tipo: 'link de publicación (se carga a mano)', previewUrl: '' });
+      continue;
+    }
     if (state.pd2Visibilidad === 'PUBLICO' && item.modoMaterial === 'post') {
       previews.push(item.postSeleccionado
         ? { i, ok: true, tipo: 'publicación existente', previewUrl: item.postSeleccionado.imagen || '' }
@@ -4967,13 +5022,13 @@ function renderResultadoFinalV2() {
   if (titulo) {
     titulo.style.color = color;
     titulo.innerHTML = todoOk
-      ? '<i class="ph ph-check-circle"></i> ' + (unaSola ? 'El pedido salió' : `Salieron ${ok} de ${resultados.length} piezas`)
-      : (ok ? `<i class="ph ph-warning"></i> Salieron ${ok} de ${resultados.length} piezas — ${fallidas} no` : '<i class="ph ph-x-circle"></i> ' + (unaSola ? 'El pedido NO salió' : 'Ninguna pieza salió'));
+      ? '<i class="ph ph-check-circle"></i> ' + (unaSola ? 'El pedido salió' : `Salieron ${ok} de ${resultados.length} contenidos`)
+      : (ok ? `<i class="ph ph-warning"></i> Salieron ${ok} de ${resultados.length} contenidos — ${fallidas} no` : '<i class="ph ph-x-circle"></i> ' + (unaSola ? 'El pedido NO salió' : 'Ningún contenido salió'));
   }
   const filas = resultados.map((r, i) => {
-    if (!r.ok) return `<div class="error" style="margin:4px 0">${unaSola ? '' : `Pieza ${i + 1}: `}${esc(r.error)}</div>`;
+    if (!r.ok) return `<div class="error" style="margin:4px 0">${unaSola ? '' : `Contenido ${i + 1}: `}${esc(r.error)}</div>`;
     const estado = estadoResultadoPiezaV2(r);
-    const prefijo = unaSola ? 'Código' : `Pieza ${i + 1}: código`;
+    const prefijo = unaSola ? 'Código' : `Contenido ${i + 1}: código`;
     return `<div style="margin:4px 0">${prefijo} <code>${esc(r.codigo)}</code> — ${estado}.</div>`;
   }).join('');
   const acciones = fallidas
@@ -5021,9 +5076,9 @@ function renderResultadoBulkV2() {
   const resultados = state.pd2BulkResultados || [];
   const unaSola = resultados.length === 1;
   const filas = resultados.map((r, i) => {
-    if (!r.ok) return `<div class="error">${unaSola ? '' : `Pieza ${i + 1}: `}${esc(r.error)}</div>`;
+    if (!r.ok) return `<div class="error">${unaSola ? '' : `Contenido ${i + 1}: `}${esc(r.error)}</div>`;
     const estado = estadoResultadoPiezaV2(r);
-    const prefijo = unaSola ? 'Código' : `Pieza ${i + 1}: código`;
+    const prefijo = unaSola ? 'Código' : `Contenido ${i + 1}: código`;
     return `<div style="color:var(--color-accent-2-600)">${prefijo} <code>${esc(r.codigo)}</code> — ${estado}.</div>`;
   }).join('');
 
@@ -5098,8 +5153,8 @@ async function enviarBulkV2() {
     if (flojas.length) {
       const conFalta = flojas.find((f) => f.falta);
       state.pd2BulkError = conFalta
-        ? `Pieza ${conFalta.i + 1}: el presupuesto no llega al mínimo de Meta. Son ${conFalta.falta.conjuntos} conjunto(s) × ${conFalta.falta.dias} día(s): hacen falta al menos ${fmtMoney(conFalta.falta.minTotal)} (${fmtMoney(conFalta.falta.minPorConjunto)} por conjunto).`
-        : `Pieza ${flojas[0].i + 1}: el reparto de presupuesto tiene que sumar 100% antes de crear.`;
+        ? `Contenido ${conFalta.i + 1}: el presupuesto no llega al mínimo de Meta. Son ${conFalta.falta.conjuntos} conjunto(s) × ${conFalta.falta.dias} día(s): hacen falta al menos ${fmtMoney(conFalta.falta.minTotal)} (${fmtMoney(conFalta.falta.minPorConjunto)} por conjunto).`
+        : `Contenido ${flojas[0].i + 1}: el reparto de presupuesto tiene que sumar 100% antes de crear.`;
       renderBulkErrorV2();
       return;
     }
@@ -6198,6 +6253,7 @@ document.addEventListener('change', (e) => {
     renderTabPedido2();
     return;
   }
+  if (e.target.id === 'pd2-formato') actualizarNombresContenidoV2();
   if (e.target.id === 'pd2-formato') {
     // Antes de verificar/subir nada no se sabe si el material de cada pieza
     // es imagen o video (son varias, no una) — Reels queda habilitado acá,
@@ -6456,7 +6512,8 @@ document.getElementById('pantalla-proyecto-usuario-select').addEventListener('ch
 // posible al momento en que se define este bloque).
 document.addEventListener('input', (e) => {
   if (e.target.id === 'hist-buscar') { state.historial.busqueda = e.target.value; renderHistorialSheet(state.items.map((it) => buildVM(it))); return; }
-  if (e.target.id === 'pd2-campana') { renderCampanasDatalistPd2(); return; }
+  if (e.target.id === 'pd2-campana') { renderCampanasDatalistPd2(); actualizarNombresContenidoV2(); return; }
+  if (/^pd2bulk\d+-linea$/.test(e.target.id || '')) { actualizarNombresContenidoV2(); return; }
   if (e.target.id === 'crea-texto') { state.creaFiltro.texto = e.target.value; renderTabCreatividades(); return; }
   if (e.target.id === 'usu-proyectos-filtro') {
     state.usuProyectosFiltro = e.target.value;

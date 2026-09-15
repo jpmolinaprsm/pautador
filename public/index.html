@@ -133,12 +133,12 @@
         <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="anuncios" style="padding:22px 20px;text-align:left">
           <i class="ph ph-file-text" style="font-size:26px;color:var(--color-accent)"></i>
           <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px" id="pd2-card-anuncios-titulo">Pedido de Anuncios</div>
-          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Una pieza o varias juntas.</div>
+          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Un contenido o varios juntos.</div>
         </button>
         <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" style="padding:22px 20px;text-align:left">
           <i class="ph ph-table" style="font-size:26px;color:var(--color-accent)"></i>
           <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px">Cargar CSV</div>
-          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Para casos especiales: subí un CSV con varias piezas juntas.</div>
+          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Para casos especiales: subí un CSV con varios contenidos juntos.</div>
         </button>
       </div>
 
@@ -156,7 +156,7 @@
             <i class="ph ph-upload-simple"></i> Subir CSV
             <input type="file" accept=".csv,text/csv" id="pd-csv-archivo" style="display:none">
           </label>
-          <span style="font-size:11px;color:var(--color-neutral-500)">Cada fila es una pieza — el material de cada una es un link a su propio Drive.</span>
+          <span style="font-size:11px;color:var(--color-neutral-500)">Cada fila es un contenido — el material de cada una es un link a su propio Drive.</span>
         </div>
         <p id="pd-csv-error" class="error" style="margin:10px 0 0" hidden></p>
         <div id="pd-csv-preview" style="margin-top:14px"></div>
@@ -310,14 +310,14 @@
       <!-- Módulo 5 -->
       <div class="field" id="pd2-modulo-5" style="border:1px solid var(--color-divider);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:12px" hidden>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <strong style="font-family:var(--font-heading);font-size:14px">5. Piezas</strong>
+          <strong style="font-family:var(--font-heading);font-size:14px">5. Contenidos</strong>
         </div>
         <div id="pd2-modulo-5-cuerpo">
           <!-- Cantidad de piezas vive acá (antes en el Módulo 4): una tarjeta
                por pieza (Material/Copy/Línea), 1 a 10, ajustada al cambiar
                (ver ajustarCantidadPiezasV2 en app.js). -->
           <div class="field" style="max-width:220px;margin-bottom:14px">
-            <label>Cantidad de piezas</label>
+            <label>Cantidad</label>
             <select class="input" id="pd2-cantidad-piezas">
               <option value="1">1</option><option value="2">2</option><option value="3">3</option>
               <option value="4">4</option><option value="5">5</option><option value="6">6</option>
@@ -513,7 +513,7 @@
 
   <div id="batch-desestimar-bar" class="batch-bar" hidden style="flex-direction:column;align-items:stretch;gap:8px">
     <div style="font-size:13px;color:var(--color-neutral-300)">Desestimar <strong id="batch-desestimar-count"></strong> — no se crea nada en Meta, el motivo se aplica a todas.</div>
-    <textarea class="input" id="batch-desestimar-motivo" rows="2" placeholder="Motivo — se aplica a todas las piezas seleccionadas"></textarea>
+    <textarea class="input" id="batch-desestimar-motivo" rows="2" placeholder="Motivo — se aplica a todos los contenidos seleccionados"></textarea>
     <p id="batch-desestimar-error" class="error" style="margin:0" hidden></p>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-secondary" id="batch-desestimar-cancelar">Cancelar</button>

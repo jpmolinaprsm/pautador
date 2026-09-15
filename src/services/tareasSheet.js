@@ -85,6 +85,29 @@ async function marcar(correlationId, ok, error) {
   }
 }
 
+// Encabezados extra de Tareas (después de las 30 de AppSheet). Se chequean
+// una vez por proceso; si faltan, se agregan al final de la fila 1.
+const HEADERS_TAREAS_EXTRA = ['Fecha inicio', 'Fecha fin', 'Link de destino', 'Duración (días)'];
+
+// Días entre inicio y fin (fin - inicio), como lo usa la ingesta. '' si falta alguna.
+function duracionDias(inicio, fin) {
+  const a = Date.parse(String(inicio || '').slice(0, 10));
+  const b = Date.parse(String(fin || '').slice(0, 10));
+  if (Number.isNaN(a) || Number.isNaN(b)) return '';
+  return Math.max(0, Math.round((b - a) / 86400000));
+}
+
+// Columnas extra de una pauta, en el orden de HEADERS_TAREAS_EXTRA.
+function columnasExtra(pauta) {
+  return [fechaHoja(pauta.fecha_inicio), fechaHoja(pauta.fecha_fin), pauta.link_destino || '', duracionDias(pauta.fecha_inicio, pauta.fecha_fin)];
+}
+let columnasFechasOk = false;
+async function asegurarColumnasFechas() {
+  if (columnasFechasOk) return;
+  await sheets.asegurarEncabezados(env.tareasSheetId, env.tareasHoja, [...HEADERS, ...HEADERS_TAREAS_EXTRA]);
+  columnasFechasOk = true;
+}
+
 // Escribe una fila por plataforma del pedido. Idempotente por dato: si ya
 // está tareas_replicado=true no vuelve a escribir (Make crearía otra tarea).
 async function replicarATareas(correlationId) {
@@ -101,9 +124,14 @@ async function replicarATareas(correlationId) {
   const tipoChar = String(pauta.codigo || '').charAt(6);
   const tipo = tipos.find((t) => String(t.codigo) === tipoChar);
   const plataformas = String(pauta.plataforma || 'Meta').split(',').map((p) => p.trim()).filter(Boolean);
-  const filas = plataformas.map((p) => armarFila(pauta, p, activo, tipo));
+  // Tareas lleva además Fecha inicio / Fecha fin / Link de destino /
+  // Duración (usuario, 2026-09-15: "eso es central en el flujo") — columnas
+  // al final de la hoja, que se crean solas la primera vez. CodigosContenido
+  // sigue con las 30 de AppSheet (esa hoja va a BigQuery).
+  const filas = plataformas.map((p) => [...armarFila(pauta, p, activo, tipo), ...columnasExtra(pauta)]);
 
   try {
+    await asegurarColumnasFechas();
     await sheets.appendRowsTo(env.tareasSheetId, env.tareasHoja, filas);
     await marcar(correlationId, true);
     return { ok: true, filas: filas.length };
@@ -132,4 +160,4 @@ async function reintentarPendientes() {
   return { reintentadas: pendientes.length, ok };
 }
 
-module.exports = { replicarATareas, reintentarPendientes, HEADERS, armarFila };
+module.exports = { replicarATareas, reintentarPendientes, asegurarColumnasFechas, HEADERS, HEADERS_TAREAS_EXTRA, armarFila, columnasExtra };

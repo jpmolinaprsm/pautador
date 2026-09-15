@@ -151,6 +151,32 @@ async function replaceSheetTo(spreadsheetId, sheetName, valores) {
   return { sheetId: props.sheetId, filas: valores.length - 1 };
 }
 
+/**
+ * Garantiza que la fila 1 de una pestaña tenga estos encabezados al final
+ * (agrega los que falten, en orden, ampliando la grilla si hace falta). No
+ * mueve ni pisa columnas existentes. Devuelve la fila de encabezados final.
+ */
+async function asegurarEncabezados(spreadsheetId, sheetName, encabezados) {
+  verificarEscrituraPermitida(spreadsheetId);
+  const sheets = await getClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+  const props = meta.data.sheets.map((s) => s.properties).find((p) => p.title === sheetName);
+  if (!props) throw new Error(`No existe la pestaña "${sheetName}".`);
+  const r = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${sheetName}!1:1` });
+  const actuales = (r.data.values && r.data.values[0]) || [];
+  const faltan = encabezados.filter((h) => !actuales.includes(h));
+  if (!faltan.length) return actuales;
+  const total = actuales.length + faltan.length;
+  const columnas = props.gridProperties.columnCount || 0;
+  if (total > columnas) {
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ appendDimension: { sheetId: props.sheetId, dimension: 'COLUMNS', length: total - columnas } }] } });
+  }
+  const desde = actuales.length + 1;
+  const letra = (n) => { let s = ''; let x = n; while (x > 0) { const m = (x - 1) % 26; s = String.fromCharCode(65 + m) + s; x = Math.floor((x - 1) / 26); } return s; };
+  await sheets.spreadsheets.values.update({ spreadsheetId, range: `${sheetName}!${letra(desde)}1:${letra(total)}1`, valueInputOption: 'RAW', requestBody: { values: [faltan] } });
+  return [...actuales, ...faltan];
+}
+
 async function updateRow() {
   throw new Error(
     'updateRow no está implementado para DATA_SOURCE=google todavía — solo modo mock lo soporta por ahora.'
@@ -163,4 +189,4 @@ async function updateRowWhere() {
   );
 }
 
-module.exports = { readTable, appendRow, updateRow, updateRowWhere, readRange, appendRowsTo, replaceSheetTo, verificarEscrituraPermitida };
+module.exports = { readTable, appendRow, updateRow, updateRowWhere, readRange, appendRowsTo, replaceSheetTo, asegurarEncabezados, verificarEscrituraPermitida };
