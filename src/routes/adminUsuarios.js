@@ -78,6 +78,16 @@ router.put('/admin/proyectos/:proyecto', requireRol('administrador'), async (req
   }
 });
 
+// POST /api/admin/insumos/exportar — vuelca ahora las tablas a la planilla
+// de insumos (lo mismo que corre solo una vez por día).
+router.post('/admin/insumos/exportar', requireRol('administrador'), async (req, res) => {
+  try {
+    res.json(await require('../services/insumosSheet').exportarTablas());
+  } catch (err) {
+    responderError(res, 'admin/insumos', err);
+  }
+});
+
 // GET /api/admin/presupuestos — presupuesto restante por cuenta automatizada
 // (lo mismo que va en el mail diario). POST /api/admin/presupuestos/enviar —
 // manda el mail ahora (para probar la configuración SMTP).

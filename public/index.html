@@ -114,8 +114,7 @@
         </div>
         <div class="tabs" id="pd2-modo-carga-wrap" style="padding:0;border:none" hidden>
           <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="anuncios" id="pd2-modo-carga-anuncios-label">Pedido de Anuncios</button>
-          <!-- Cargar CSV desactivado por ahora (usuario, 2026-09-14). -->
-          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="csv" disabled title="Por ahora no está disponible" style="opacity:.45;cursor:not-allowed">Cargar CSV</button>
+          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="csv">Cargar CSV</button>
         </div>
       </div>
 
@@ -136,12 +135,10 @@
           <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px" id="pd2-card-anuncios-titulo">Pedido de Anuncios</div>
           <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Una pieza o varias juntas.</div>
         </button>
-        <!-- Cargar CSV desactivado por ahora (usuario, 2026-09-14): queda en
-             gris y sin acción; cambiarModoCargaV2 también lo ignora. -->
-        <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" disabled title="Por ahora no está disponible" style="padding:22px 20px;text-align:left;opacity:.45;cursor:not-allowed;filter:grayscale(1)">
-          <i class="ph ph-table" style="font-size:26px;color:var(--color-neutral-500)"></i>
+        <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" style="padding:22px 20px;text-align:left">
+          <i class="ph ph-table" style="font-size:26px;color:var(--color-accent)"></i>
           <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px">Cargar CSV</div>
-          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Por ahora no está disponible.</div>
+          <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Para casos especiales: subí un CSV con varias piezas juntas.</div>
         </button>
       </div>
 

@@ -2226,9 +2226,17 @@ async function cargarDatosPedido() {
 // cada vez que cambia el Activo elegido (Módulo 1/CSV), nunca es un fetch
 // fijo: cada Activo tiene sus propias audiencias guardadas en Meta.
 async function cargarAudienciasPorActivo(activoKey) {
-  if (!activoKey) { state.pdAudiencias = []; return; }
+  if (!activoKey) { state.pdAudiencias = []; state.pdAudienciasDe = ''; return; }
   const r = await apiFetch(`/api/audiencias?activo_key=${encodeURIComponent(activoKey)}`);
   state.pdAudiencias = r.ok ? await r.json() : [];
+  // De qué activo son las audiencias cargadas — el CSV lo chequea antes de
+  // resolver nombres (si no, con el Activo recién cambiado o todavía
+  // cargando, "Audiencia X no encontrada" aunque exista; visto 2026-09-15).
+  state.pdAudienciasDe = activoKey;
+}
+
+async function asegurarAudienciasDe(activoKey) {
+  if (activoKey && state.pdAudienciasDe !== activoKey) await cargarAudienciasPorActivo(activoKey);
 }
 
 async function cargarCampanasSugeridas(proyecto) {
@@ -2531,26 +2539,45 @@ async function cargarProyectosPanel() {
   renderProyectosPanel();
 }
 
+// Panel de Proyectos (2026-09-15): el universo es la hoja "Proyectos" de la
+// planilla de insumos (catálogo, la edita el usuario) más los que tienen
+// activos. "Prender" = visible 5 días y vuelve a la regla de 45 días;
+// "Apagar" = oculto hasta que se prenda o se pase a automático.
 function renderProyectosPanel() {
   const cont = document.getElementById('usu-proyectos');
   if (!cont) return;
-  const lista = state.usuProyectos || [];
-  if (!lista.length) { cont.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500)">Cargando proyectos…</p>'; return; }
+  const todos = state.usuProyectos || [];
+  if (!todos.length) { cont.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500)">Cargando proyectos…</p>'; return; }
   const fecha = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—');
-  cont.innerHTML = '<div class="lista-scroll"><div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 110px 90px minmax(0,1.6fr) 260px;gap:10px;min-width:900px;font-size:13px">'
-    + '<div class="grid-header" style="display:contents"><div>Proyecto</div><div>Cliente</div><div>Último pedido</div><div>Últ. 45 días</div><div>Estado</div><div></div></div>'
+  const filtro = (state.usuProyectosFiltro || '').trim().toLowerCase();
+  const soloVisibles = !!state.usuProyectosSoloVisibles;
+  const lista = todos
+    .filter((p) => !filtro || [p.proyecto, p.cliente, p.codigo].join(' ').toLowerCase().includes(filtro))
+    .filter((p) => !soloVisibles || p.visible)
+    .sort((a, b) => (b.visible - a.visible) || a.cliente.localeCompare(b.cliente, 'es') || a.proyecto.localeCompare(b.proyecto, 'es'));
+  const visibles = todos.filter((p) => p.visible).length;
+  const barra = `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:13px">
+      <input class="input" id="usu-proyectos-filtro" placeholder="Buscar proyecto, cliente o código…" value="${esc(state.usuProyectosFiltro || '')}" style="max-width:300px">
+      <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="usu-proyectos-solo-visibles" ${soloVisibles ? 'checked' : ''}> Solo los que se ofrecen</label>
+      <span style="color:var(--color-neutral-500)">${visibles} de ${todos.length} se ofrecen · ${lista.length} en la lista</span>
+    </div>`;
+  cont.innerHTML = barra + '<div class="lista-scroll"><div style="display:grid;grid-template-columns:minmax(0,1.5fr) 70px minmax(0,1fr) 100px 70px minmax(0,1.7fr) 280px;gap:10px;min-width:980px;font-size:13px">'
+    + '<div class="grid-header" style="display:contents"><div>Proyecto</div><div>Código</div><div>Cliente</div><div>Último pedido</div><div>45 días</div><div>Estado</div><div></div></div>'
     + lista.map((p) => {
       const chip = p.visible ? '<span class="tag tag-accent-2">Se ofrece</span>' : '<span class="tag tag-neutral">Oculto</span>';
       const cambiando = state.usuProyectoCambiando === p.proyecto;
-      const btn = (estado, label, activo) => `<button type="button" class="btn ${activo ? 'btn-primary' : 'btn-secondary'}" style="font-size:12px;padding:3px 8px" data-action="usu-proyecto-estado" data-id="${esc(p.proyecto)}" data-estado="${estado}" ${cambiando || activo ? 'disabled' : ''}>${label}</button>`;
+      const bloqueado = !p.activoEnCatalogo || !p.tieneActivos;
+      const btn = (estado, label, activo, title) => `<button type="button" class="btn ${activo ? 'btn-primary' : 'btn-secondary'}" style="font-size:12px;padding:3px 8px" title="${esc(title || '')}" data-action="usu-proyecto-estado" data-id="${esc(p.proyecto)}" data-estado="${estado}" ${cambiando || activo || bloqueado ? 'disabled' : ''}>${label}</button>`;
+      const fila = 'padding:8px 0;border-top:1px solid var(--color-divider)';
       return `<div style="display:contents">
-        <div style="padding:8px 0;border-top:1px solid var(--color-divider);font-weight:600">${esc(p.proyecto)}</div>
-        <div style="padding:8px 0;border-top:1px solid var(--color-divider);color:var(--color-neutral-500)">${esc(p.cliente)}</div>
-        <div style="padding:8px 0;border-top:1px solid var(--color-divider)">${esc(fecha(p.ultimaFecha))}</div>
-        <div style="padding:8px 0;border-top:1px solid var(--color-divider)">${p.volumen}</div>
-        <div style="padding:8px 0;border-top:1px solid var(--color-divider)">${chip} <span style="font-size:11px;color:var(--color-neutral-500)">${esc(p.motivo)}</span></div>
+        <div style="${fila};font-weight:600">${esc(p.proyecto)}${p.enCatalogo ? '' : ' <span class="tag tag-outline" style="font-size:10px" title="No está en la hoja Proyectos de la planilla de insumos">sin catálogo</span>'}</div>
+        <div style="${fila};font-family:var(--font-mono, monospace);font-size:12px">${esc(p.codigo || '')}</div>
+        <div style="${fila};color:var(--color-neutral-500)">${esc(p.cliente)}</div>
+        <div style="${fila}">${esc(fecha(p.ultimaFecha))}</div>
+        <div style="${fila}">${p.volumen}</div>
+        <div style="${fila}">${chip} <span style="font-size:11px;color:var(--color-neutral-500)">${esc(p.motivo)}</span></div>
         <div style="padding:6px 0;border-top:1px solid var(--color-divider);display:flex;gap:6px;justify-content:flex-end">
-          ${btn('activado', 'Activar', p.estadoManual === 'activado')}${btn('desactivado', 'Desactivar', p.estadoManual === 'desactivado')}${btn('automatico', 'Automático', p.estadoManual === 'automatico')}
+          ${btn('activado', 'Prender 5 días', p.estadoManual === 'activado', 'Se ofrece 5 días aunque no tenga pedidos; después vuelve a la regla de 45 días')}${btn('desactivado', 'Apagar', p.estadoManual === 'desactivado', 'No se ofrece hasta que se prenda o se pase a automático')}${btn('automatico', 'Automático', p.estadoManual === 'automatico', 'Manda la regla de 45 días')}
         </div>
       </div>`;
     }).join('')
@@ -2995,6 +3022,7 @@ async function validarFilasCsv(indices) {
   const activoKey = document.getElementById('pd-csv-activo').value;
   idxs.forEach((i) => { state.pdCsvFilas[i].estado = 'validando'; });
   renderCsvUI();
+  await asegurarAudienciasDe(activoKey);
 
   // Resolver Eje/Audiencia por nombre ANTES de llamar al servidor — si el
   // nombre no matchea nada real, ya es un error claro acá, sin ni siquiera
@@ -3042,6 +3070,7 @@ async function confirmarCargaCsv() {
   renderCsvUI();
   const proyecto = document.getElementById('pd-csv-proyecto').value;
   const activoKey = document.getElementById('pd-csv-activo').value;
+  await asegurarAudienciasDe(activoKey);
   // Se vuelve a resolver Eje/Audiencia (no solo reusar lo ya validado) —
   // por si algo cambió justo entre el preview y este click.
   const idxsAEnviar = [];
@@ -3156,7 +3185,11 @@ function renderFilaCsv(fila, i) {
     +   '<span style="font-family:var(--font-heading);font-size:13px">Fila ' + (i + 1) + (c.campana ? ' — ' + esc(c.campana) : '') + '</span>'
     +   badge
     + '</div>'
-    + (fila.error ? '<div style="font-size:12px;color:var(--color-warning, #d08a1e);margin-bottom:8px">' + esc(fila.error) + '</div>' : '')
+    // Fila en error: "Reintentar" vuelve a validarla tal cual (sirve para
+    // errores pasajeros, ej. Drive que no respondió a tiempo al crear; visto
+    // 2026-09-15) — antes había que tocar un campo para que se revalidara.
+    + (fila.error ? '<div style="display:flex;gap:10px;align-items:center;font-size:12px;color:var(--color-warning, #d08a1e);margin-bottom:8px"><span style="flex:1">' + esc(fila.error) + '</span>'
+      + (fila.estado === 'error' ? '<button type="button" class="btn btn-secondary" style="font-size:12px;padding:3px 10px;flex:none" data-action="pd-csv-reintentar" data-id="' + i + '"><i class="ph ph-arrows-clockwise"></i> Reintentar</button>' : '') + '</div>' : '')
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px">' + CSV_CAMPOS_VISIBLES.map(campoHtml).join('') + '</div>'
     + '</div>';
 }
@@ -3742,9 +3775,6 @@ function invalidarPreviewsPiezasV2() {
 // redirige directo al modo CSV de "Pedido de Pauta" clásico. "Pedido de
 // Anuncios" arranca siempre con 1 pieza (el Módulo 4 deja subirla hasta 10).
 function cambiarModoCargaV2(modo) {
-  // Cargar CSV desactivado por ahora (usuario, 2026-09-14): los botones
-  // están disabled en el HTML; esto cubre cualquier otro disparador.
-  if (modo === 'csv') return;
   state.pd2ModoCarga = modo;
   // "Ni bien toca Pedido de Anuncios": la cuadrícula de plataformas se
   // pregunta siempre al entrar (queda lo elegido la última vez como default).
@@ -5878,6 +5908,7 @@ document.addEventListener('click', (e) => {
   if (action === 'stop-prop') { e.stopPropagation(); return; }
   if (action === 'pedir-asignacion') { pedirAsignacionProyectos(); return; }
   if (action === 'crea-recargar') { cargarCreatividades(); return; }
+  if (action === 'pd-csv-reintentar') { validarFilasCsv([Number(id)]); return; }
   if (action === 'elegir-usuario') { elegirUsuario(id); return; }
   if (action === 'elegir-proyecto') { elegirProyecto(id); return; }
   if (action === 'elegir-modo') { elegirModo(id); return; }
@@ -6103,6 +6134,7 @@ document.addEventListener('change', (e) => {
   if (e.target.id === 'crea-proyecto') { state.creaFiltro.proyecto = e.target.value; state.creaFiltro.campana = ''; renderTabCreatividades(); return; }
   if (e.target.id === 'crea-campana') { state.creaFiltro.campana = e.target.value; renderTabCreatividades(); return; }
   if (e.target.id === 'crea-vencidas') { state.creaFiltro.vencidas = e.target.checked; cargarCreatividades(); return; }
+  if (e.target.id === 'usu-proyectos-solo-visibles') { state.usuProyectosSoloVisibles = e.target.checked; renderProyectosPanel(); return; }
   if (e.target.id === 'usu-edit-rol') { if (state.usuEdit) { state.usuEdit.rol = e.target.value; renderTabUsuarios(); } return; }
   if (e.target.id === 'usu-edit-habilitado') { if (state.usuEdit) state.usuEdit.habilitado = e.target.checked; return; }
   if (e.target.id === 'usu-edit-nombre') { if (state.usuEdit) state.usuEdit.nombre = e.target.value; return; }
@@ -6422,6 +6454,14 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'hist-buscar') { state.historial.busqueda = e.target.value; renderHistorialSheet(state.items.map((it) => buildVM(it))); return; }
   if (e.target.id === 'pd2-campana') { renderCampanasDatalistPd2(); return; }
   if (e.target.id === 'crea-texto') { state.creaFiltro.texto = e.target.value; renderTabCreatividades(); return; }
+  if (e.target.id === 'usu-proyectos-filtro') {
+    state.usuProyectosFiltro = e.target.value;
+    const pos = e.target.selectionStart;
+    renderProyectosPanel();
+    const el = document.getElementById('usu-proyectos-filtro');
+    if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    return;
+  }
   // Si se toca el material, lo verificado deja de valer: hay que volver a
   // verificar antes de poder crear.
   if (e.target.id && /^pd2bulk\d+-material$/.test(e.target.id) && state.pd2BulkPreviews) {

@@ -9,7 +9,7 @@ const MAX_AUDIENCIAS_POR_PROYECTO = 10;
 const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config/mvp');
 const { PLATAFORMAS, MODO_POR_FORMATO, categoriasPara } = require('../config/plataformas');
 const { volumenPorProyectoDesde, filasDesde } = require('../services/codigosSheet');
-const { proyectosVisibles } = require('../services/proyectos');
+const { proyectosVisibles, clientesPorProyecto } = require('../services/proyectos');
 const { generarSiguienteCodigo } = require('../services/codigoGenerator');
 const { readTable, insertarFila } = require('../services/dataSource');
 const { getLimitesCuenta } = require('../services/metaLimites');
@@ -151,20 +151,18 @@ router.get('/proyectos', async (req, res) => {
     // Panel Usuarios → Proyectos) — ver services/proyectos.js.
     const visibles = await proyectosVisibles();
     proyectos = proyectos.filter((p) => visibles.has(p));
+    // Cliente de cada proyecto: hoja "Proyectos" del catálogo primero,
+    // config_activos.cliente después (ver services/proyectos.js).
+    const clientePor = await clientesPorProyecto();
     // Clientes apagados por ahora (CLIENTES_OCULTOS, ej. Córdoba hasta que
     // tenga su módulo) — se esconden todos sus proyectos.
     if (env.clientesOcultos.length) {
-      const clienteDe = {};
-      activos.forEach((a) => { if (a.proyecto && a.cliente && !clienteDe[a.proyecto]) clienteDe[a.proyecto] = a.cliente; });
-      proyectos = proyectos.filter((p) => !env.clientesOcultos.includes(clienteDe[p] || ''));
+      proyectos = proyectos.filter((p) => !env.clientesOcultos.includes(clientePor[p] || ''));
     }
-    // ?detalle=1: con el Cliente de cada proyecto (config_activos.cliente,
-    // migración 008) — la pantalla de Proyecto los agrupa por cliente.
-    // Con volumen15 = códigos de los últimos 15 días en CodigosContenido,
-    // ordenados de mayor a menor (después por nombre).
+    // ?detalle=1: con el Cliente de cada proyecto — la pantalla de Proyecto
+    // los agrupa por cliente. Con volumen15 = códigos de los últimos 15 días
+    // en CodigosContenido, ordenados de mayor a menor (después por nombre).
     if (req.query.detalle === '1') {
-      const clientePor = {};
-      activos.forEach((a) => { if (a.proyecto && a.cliente && !clientePor[a.proyecto]) clientePor[a.proyecto] = a.cliente; });
       const desde = new Date(Date.now() - 15 * 86400000).toISOString().slice(0, 10);
       const volumen = (await volumenPorProyectoDesde(desde)) || {};
       return res.json(proyectos

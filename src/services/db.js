@@ -78,7 +78,7 @@ const COLUMNAS = {
   usuarios: ['id', 'nombre', 'rol', 'proyectos', 'email', 'es_superadmin', 'habilitado'],
   usuario_accesos: ['id', 'usuario_id', 'proyecto', 'activo_key', 'creado_en', 'creado_por'],
   historial_marcas: ['codigo', 'estado', 'marcado_por', 'marcado_en'],
-  proyectos_estado: ['proyecto', 'estado', 'modificado_por', 'modificado_en'],
+  proyectos_estado: ['proyecto', 'estado', 'modificado_por', 'modificado_en', 'activado_hasta'],
   audiencias_catalogo: ['id', 'proyecto', 'canal', 'codigo', 'nombre', 'tamano', 'n_potencial', 'saved_audience_id', 'activo_key', 'activo_excel', 'hoja', 'creado_en'],
   escala_presupuestos: ['tamaño', 'intensidad', 'monto'],
 };

@@ -98,6 +98,17 @@ const env = {
   // pedido nuevo se inserta como una fila más (ver services/codigosSheet.js).
   codigosSheetId: process.env.CODIGOS_SHEET_ID || '',
   codigosHoja: process.env.CODIGOS_HOJA || 'CodigosContenido',
+  // Planilla "MEDIA - AUTOMATIZACIONES" del usuario (2026-09-15): la hoja
+  // "Proyectos" es el CATÁLOGO de proyectos (nombre, código, cliente,
+  // Estado Activo/Inactivo) — la edita el usuario, PAUTADOR solo la lee
+  // (services/proyectosCatalogo.js). En las otras pestañas PAUTADOR vuelca
+  // una copia de sus tablas una vez por día (services/insumosSheet.js).
+  insumosSheetId: process.env.INSUMOS_SHEET_ID || '',
+  proyectosHoja: process.env.PROYECTOS_HOJA || 'Proyectos',
+  insumosExportHora: Number(process.env.INSUMOS_EXPORT_HORA || 6),
+  // Días que un proyecto queda visible cuando un admin lo "prende" a mano;
+  // después vuelve a la regla de actividad.
+  proyectosPrendidoDias: Number(process.env.PROYECTOS_PRENDIDO_DIAS || 5),
   // Un proyecto sin ningún código en esa hoja desde esta fecha (ISO) no se
   // muestra para elegir (pedido del usuario 2026-09-11: "desde el 15 de
   // agosto"). Vacío = se muestran todos.

@@ -92,6 +92,10 @@ app.listen(env.port, () => {
   // automatizadas (ALERTAS_MAIL_TO + SMTP_*, ver services/alertasPresupuesto.js).
   if (env.metaMode === 'real') programarEnvioDiario();
 
+  // Copia diaria de las tablas de configuración a la planilla de insumos
+  // (INSUMOS_SHEET_ID, ver services/insumosSheet.js).
+  require('./services/insumosSheet').programarExportacionDiaria();
+
   // Creatividades vencidas (CREATIVIDADES_DIAS): una pasada al arrancar y
   // después una por día. Meta ya tiene su copia de lo publicado.
   if (storage.habilitado()) {

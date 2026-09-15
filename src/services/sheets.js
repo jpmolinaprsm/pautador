@@ -126,6 +126,31 @@ async function appendRowsTo(spreadsheetId, sheetName, filas) {
  * no está en uso (ver README). Requiere ubicar el número de fila real antes
  * de poder hacer un values.update con un range puntual.
  */
+/**
+ * Reemplaza una pestaña entera de cualquier planilla con `valores` (matriz,
+ * primera fila = encabezados). La crea si no existe. Deja la primera fila en
+ * negrita y congelada. La usa el volcado diario de tablas (insumosSheet.js).
+ */
+async function replaceSheetTo(spreadsheetId, sheetName, valores) {
+  verificarEscrituraPermitida(spreadsheetId);
+  const sheets = await getClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+  let props = meta.data.sheets.map((s) => s.properties).find((p) => p.title === sheetName);
+  if (!props) {
+    const r = await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: sheetName } } }] } });
+    props = r.data.replies[0].addSheet.properties;
+  }
+  await sheets.spreadsheets.values.clear({ spreadsheetId, range: sheetName });
+  await sheets.spreadsheets.values.update({ spreadsheetId, range: `${sheetName}!A1`, valueInputOption: 'RAW', requestBody: { values: valores } });
+  const columnas = Math.max(1, ...valores.map((f) => f.length));
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [
+    { repeatCell: { range: { sheetId: props.sheetId, startRowIndex: 0, endRowIndex: 1 }, cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.93, green: 0.93, blue: 0.93 } } }, fields: 'userEnteredFormat(textFormat.bold,backgroundColor)' } },
+    { updateSheetProperties: { properties: { sheetId: props.sheetId, gridProperties: { frozenRowCount: 1 } }, fields: 'gridProperties.frozenRowCount' } },
+    { autoResizeDimensions: { dimensions: { sheetId: props.sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: Math.min(columnas, 30) } } },
+  ] } });
+  return { sheetId: props.sheetId, filas: valores.length - 1 };
+}
+
 async function updateRow() {
   throw new Error(
     'updateRow no está implementado para DATA_SOURCE=google todavía — solo modo mock lo soporta por ahora.'
@@ -138,4 +163,4 @@ async function updateRowWhere() {
   );
 }
 
-module.exports = { readTable, appendRow, updateRow, updateRowWhere, readRange, appendRowsTo, verificarEscrituraPermitida };
+module.exports = { readTable, appendRow, updateRow, updateRowWhere, readRange, appendRowsTo, replaceSheetTo, verificarEscrituraPermitida };

@@ -41,6 +41,14 @@ function leerAppSheetContenidos() {
 // cargado a mano que AppSheet no conoce), se deriva uno que arranca con
 // "TEST" para que quede clarísimo que no es real.
 async function resolverPrefijoProyecto(nombreProyecto) {
+  // Hoja "Proyectos" del catálogo (INSUMOS_SHEET_ID) primero — es la dueña
+  // del código desde el 2026-09-15 (ver services/proyectosCatalogo.js).
+  try {
+    const cat = await require('./proyectosCatalogo').getProyectoCatalogo(nombreProyecto);
+    if (cat && /^[A-Z0-9]{6}$/.test(cat.codigo)) return cat.codigo;
+  } catch (err) {
+    console.warn('[codigoGenerator] no pude leer el catálogo de proyectos para el prefijo:', err.message);
+  }
   try {
     const activos = await readTable('config_activos');
     const conCodigo = activos.find((a) => a.proyecto === nombreProyecto && /^[A-Z0-9]{6}$/.test(String(a.codigo_proyecto || '').trim()));
