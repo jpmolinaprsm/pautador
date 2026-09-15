@@ -34,7 +34,10 @@
        pendientes por proyecto; Administrador tiene "Ver todos los proyectos". -->
   <div id="pantalla-proyecto" class="pantalla-onboarding" hidden>
     <div class="pantalla-onboarding-card pantalla-onboarding-card--ancha">
-      <p class="pantalla-onboarding-eyebrow" id="pantalla-proyecto-usuario"></p>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <p class="pantalla-onboarding-eyebrow" id="pantalla-proyecto-usuario" style="margin:0"></p>
+        <button type="button" class="btn btn-ghost" data-action="cerrar-sesion" style="font-size:12px;padding:4px 8px" title="Salir y entrar con otro usuario"><i class="ph ph-sign-out"></i> Salir</button>
+      </div>
       <h4 style="margin:0 0 4px">¿En qué Proyecto vas a trabajar?</h4>
       <p style="margin:0 0 20px;font-size:13px;color:var(--color-neutral-500)">Vas a ver y pautar solo lo de este proyecto — se puede cambiar después con "Cambiar de Proyecto".</p>
       <div id="pantalla-proyecto-lista" class="pantalla-onboarding-lista"></div>
@@ -51,7 +54,10 @@
        app.js y middleware/usuarioActual.js para el chequeo server-side. -->
   <div id="pantalla-modo" class="pantalla-onboarding" hidden>
     <div class="pantalla-onboarding-card">
-      <p class="pantalla-onboarding-eyebrow" id="pantalla-modo-contexto"></p>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <p class="pantalla-onboarding-eyebrow" id="pantalla-modo-contexto" style="margin:0"></p>
+        <button type="button" class="btn btn-ghost" data-action="volver-a-proyecto" style="font-size:12px;padding:4px 8px"><i class="ph ph-arrow-left"></i> Volver a Proyecto</button>
+      </div>
       <h4 style="margin:0 0 4px">¿Qué pedido vas a hacer?</h4>
       <p style="margin:0 0 20px;font-size:13px;color:var(--color-neutral-500)">Define cómo se carga el anuncio y qué opciones vas a poder elegir después.</p>
       <div id="pantalla-modo-lista" class="pantalla-onboarding-lista"></div>
@@ -64,7 +70,10 @@
        config_activos.ecosistema_historico). -->
   <div id="pantalla-ecosistema" class="pantalla-onboarding" hidden>
     <div class="pantalla-onboarding-card">
-      <p class="pantalla-onboarding-eyebrow" id="pantalla-ecosistema-contexto"></p>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <p class="pantalla-onboarding-eyebrow" id="pantalla-ecosistema-contexto" style="margin:0"></p>
+        <button type="button" class="btn btn-ghost" data-action="volver-a-modo" style="font-size:12px;padding:4px 8px"><i class="ph ph-arrow-left"></i> Volver a tipo de pedido</button>
+      </div>
       <h4 style="margin:0 0 4px">¿Por qué canal sale el contenido?</h4>
       <p style="margin:0 0 20px;font-size:13px;color:var(--color-neutral-500)">Oficial o Informativo — define qué Tipos de campaña y qué Activos vas a poder elegir después.</p>
       <div id="pantalla-ecosistema-lista" class="pantalla-onboarding-lista"></div>
@@ -381,8 +390,18 @@
       </div>
       <div id="historial-cuerpo" hidden>
         <div style="display:flex;gap:10px;align-items:center;margin:8px 0 10px;flex-wrap:wrap">
-          <input class="input" id="hist-buscar" placeholder="Buscar por código, campaña, contenido, activo o audiencia" style="flex:1;min-width:260px">
-          <select class="input" id="hist-activo" style="max-width:260px"></select>
+          <input class="input" id="hist-buscar" placeholder="Buscar por código, campaña, contenido, activo, audiencia o proyecto" style="flex:1;min-width:260px">
+        </div>
+        <!-- Filtros por categoría (usuario, 2026-09-15). Los llena renderHistorialSheet
+             con los valores que hay; un desplegable con un solo valor se esconde. -->
+        <div style="display:flex;gap:8px;align-items:center;margin:0 0 10px;flex-wrap:wrap">
+          <select class="input" id="hist-proyecto" style="max-width:220px;font-size:12px" hidden></select>
+          <select class="input" id="hist-activo" style="max-width:200px;font-size:12px"></select>
+          <select class="input" id="hist-canal" style="max-width:160px;font-size:12px"></select>
+          <select class="input" id="hist-plataforma" style="max-width:170px;font-size:12px"></select>
+          <select class="input" id="hist-estado" style="max-width:160px;font-size:12px"></select>
+          <select class="input" id="hist-eje" style="max-width:180px;font-size:12px"></select>
+          <select class="input" id="hist-creador" style="max-width:200px;font-size:12px"></select>
         </div>
         <div class="lista-scroll">
           <div class="grid-header" id="hist-grid-header">

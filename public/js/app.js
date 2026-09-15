@@ -277,11 +277,15 @@ const TABS_POR_ROL = {
 function tabsPermitidas() {
   const u = usuarioActual();
   if (!u) return [];
-  const tabs = TABS_POR_ROL[u.rol] || [];
+  let tabs = TABS_POR_ROL[u.rol] || [];
   // Biblioteca de creatividades: solo superadmin (usuario, 2026-09-14).
   // "Agregar Activos / Audiencias": también solo superadmin por ahora
   // (usuario, 2026-09-15).
-  return u.es_superadmin ? [...tabs, 'creatividades'] : tabs.filter((t) => t !== 'admin');
+  tabs = u.es_superadmin ? [...tabs, 'creatividades'] : tabs.filter((t) => t !== 'admin');
+  // Entrada ADMIN (todos los proyectos): sin pedidos — un pedido siempre es
+  // de un proyecto concreto.
+  if (state.proyectoActivo === 'TODOS') tabs = tabs.filter((t) => t !== 'pedido2');
+  return tabs;
 }
 
 // "Validación de Anuncios" es de edición para implementador/administrador,
@@ -1781,12 +1785,24 @@ async function cargarHistorialSheet() {
   state.historial.cargado = true;
 }
 
+// Filtros del Historial por categoría (usuario, 2026-09-15): además del
+// texto y el activo, proyecto (útil en la entrada ADMIN), canal, plataforma,
+// estado, eje y quién lo cargó. Cada uno es un desplegable con "Todos".
+const FILTROS_HISTORIAL = [
+  ['proyecto', 'proyecto', 'Todos los proyectos'],
+  ['activo', 'activo', 'Todos los activos'],
+  ['canal', 'ecosistema', 'Ambos canales'],
+  ['plataforma', 'plataforma', 'Todas las plataformas'],
+  ['estado', 'estado', 'Todos los estados'],
+  ['eje', 'eje', 'Todos los ejes'],
+  ['creador', 'creador', 'Cargado por (todos)'],
+];
 function filasHistorialFiltradas() {
-  const q = (state.historial.busqueda || '').trim().toLowerCase();
-  const act = state.historial.activo || '';
-  return (state.historial.filas || []).filter((f) =>
-    (!act || f.activo === act)
-    && (!q || [f.codigo, f.campana, f.contenido, f.activo, f.audiencia].some((v) => String(v || '').toLowerCase().includes(q))));
+  const h = state.historial;
+  const q = (h.busqueda || '').trim().toLowerCase();
+  return (h.filas || []).filter((f) =>
+    FILTROS_HISTORIAL.every(([clave, campo]) => !h[clave] || String(f[campo] || '') === h[clave])
+    && (!q || [f.codigo, f.campana, f.contenido, f.activo, f.audiencia, f.proyecto].some((v) => String(v || '').toLowerCase().includes(q))));
 }
 
 function tagEstadoHistorial(estado) {
@@ -1843,9 +1859,15 @@ function renderHistorialSheet(vms) {
   document.getElementById('historial-cuerpo').hidden = !state.historyOpen;
   if (!state.historyOpen) return;
 
-  const activos = [...new Set((h.filas || []).map((f) => f.activo).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
-  const selActivo = document.getElementById('hist-activo');
-  selActivo.innerHTML = '<option value="">Todos los activos</option>' + activos.map((a) => `<option value="${esc(a)}" ${a === h.activo ? 'selected' : ''}>${esc(a)}</option>`).join('');
+  // Un desplegable por categoría, con los valores que hay en las filas
+  // cargadas. Proyecto solo se muestra si hay más de uno (entrada ADMIN).
+  FILTROS_HISTORIAL.forEach(([clave, campo, todos]) => {
+    const sel = document.getElementById('hist-' + clave);
+    if (!sel) return;
+    const valores = [...new Set((h.filas || []).map((f) => String(f[campo] || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+    sel.innerHTML = `<option value="">${esc(todos)}</option>` + valores.map((v) => `<option value="${esc(v)}" ${v === h[clave] ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    sel.hidden = clave === 'proyecto' ? valores.length < 2 : valores.length < 2 && !h[clave];
+  });
   document.getElementById('hist-desde').textContent = h.desde ? 'desde el ' + h.desde.slice(8, 10) + '/' + h.desde.slice(5, 7) + '/' + h.desde.slice(0, 4) : '';
   document.getElementById('hist-grid-header').style.gridTemplateColumns = COLS_HISTORIAL_SHEET;
 
@@ -5497,6 +5519,25 @@ function esAdmin() {
   const u = usuarioActual();
   return !!u && u.rol === 'administrador';
 }
+function esSuperadmin() {
+  const u = usuarioActual();
+  return !!u && u.es_superadmin === true;
+}
+
+// Entrada ADMIN desde la pantalla de Proyecto (solo superadmin): todo junto
+// — Historial de todos los proyectos, los dos modos y los dos canales — sin
+// la pestaña de pedidos (un pedido siempre es de un proyecto concreto).
+function elegirAdminTodo() {
+  if (!esSuperadmin()) return;
+  state.proyectoActivo = 'TODOS'; localStorage.setItem('pautador_proyecto_activo', 'TODOS');
+  state.modoActivo = 'TODOS'; localStorage.setItem('pautador_modo_activo', 'TODOS');
+  state.ecosistemaActivo = 'TODOS'; localStorage.setItem('pautador_ecosistema_activo', 'TODOS');
+  state.items = [];
+  state.pdProyectos = [];
+  state.tabActiva = 'pendientes';
+  render();
+  avanzarSiCorresponde();
+}
 
 // Proyecto de un cliente habilitado solo para Informativo (Córdoba, por
 // ahora) — viene de GET /api/proyectos?detalle=1 (CLIENTES_SOLO_INFORMATIVO).
@@ -5541,10 +5582,12 @@ function asegurarProyectosDetalle(volverADibujar) {
 function pantallaActual() {
   if (!state.usuarioActualId || !usuarioActual()) return 'login';
   const permitidos = proyectosPermitidos();
-  // 'TODOS' ya no es una opción (se sacó "Ver todos los proyectos") — un
-  // valor viejo guardado en el browser manda de vuelta a elegir uno.
-  const proyectoValido = state.proyectoActivo !== 'TODOS'
-    && !!state.proyectoActivo && (permitidos === 'todos' || permitidos.includes(state.proyectoActivo));
+  // 'TODOS' = entrada ADMIN (solo superadmin, usuario 2026-09-15): ve todo
+  // junto (Historial de todos los proyectos, paneles) menos pedidos. Para
+  // cualquier otro, un 'TODOS' guardado manda de vuelta a elegir proyecto.
+  const proyectoValido = state.proyectoActivo === 'TODOS'
+    ? esSuperadmin()
+    : (!!state.proyectoActivo && (permitidos === 'todos' || permitidos.includes(state.proyectoActivo)));
   if (!proyectoValido) return 'proyecto';
   const modoValido = state.modoActivo === 'TODOS'
     ? esAdmin()
@@ -5845,9 +5888,16 @@ function renderPantallaProyecto() {
       + '<div class="cliente-nombre"><i class="ph ph-buildings"></i> ' + esc(cliente) + '</div>'
       + proyectos.sort((x, y) => (volumenDe[y] || 0) - (volumenDe[x] || 0) || x.localeCompare(y, 'es')).map(opcionProyecto).join('')
       + '</div>').join('');
-  const opciones = tarjetas ? '<div class="cliente-grid">' + tarjetas + '</div>' : '';
-  // Sin "Ver todos los proyectos" (sacado a pedido del usuario 2026-09-11):
-  // siempre se trabaja sobre un proyecto concreto, también el admin.
+  // Entrada ADMIN (solo superadmin, usuario 2026-09-15): todo junto menos
+  // pedidos. Va arriba de la cuadrícula de clientes.
+  const tarjetaAdmin = (u && u.es_superadmin)
+    ? '<button type="button" class="pantalla-onboarding-opcion" data-action="elegir-admin" style="border-style:dashed;margin-bottom:14px;width:100%">'
+      + '<span style="display:flex;flex-direction:column;gap:3px;min-width:0"><span class="titulo"><i class="ph ph-shield-check"></i> ADMIN — ver todo junto</span>'
+      + '<span class="subtitulo" style="margin:0">Historial de todos los proyectos, los dos modos y los dos canales. Sin pedidos: para pedir, entrá a un proyecto.</span></span></button>'
+    : '';
+  const opciones = tarjetas ? tarjetaAdmin + '<div class="cliente-grid">' + tarjetas + '</div>' : tarjetaAdmin;
+  // Sin "Ver todos los proyectos" para el resto (sacado a pedido del usuario
+  // 2026-09-11): siempre se trabaja sobre un proyecto concreto.
   // Sin proyectos asignados (usuario nuevo del dominio): botón "Pedir
   // asignación de Proyectos" → mail a los administradores (usuario,
   // 2026-09-14). Un admin sin proyectos es raro (ve todos): texto simple.
@@ -6087,6 +6137,25 @@ document.addEventListener('click', (e) => {
   if (action === 'pd-csv-reintentar') { validarFilasCsv([Number(id)]); return; }
   if (action === 'elegir-usuario') { elegirUsuario(id); return; }
   if (action === 'elegir-proyecto') { elegirProyecto(id); return; }
+  if (action === 'elegir-admin') { elegirAdminTodo(); return; }
+  // Volver atrás en el onboarding (usuario, 2026-09-15): cada pantalla
+  // vuelve a la anterior; Proyecto vuelve al Login (salir).
+  if (action === 'volver-a-modo') {
+    state.ecosistemaActivo = null; localStorage.removeItem('pautador_ecosistema_activo');
+    state.modoActivo = null; localStorage.removeItem('pautador_modo_activo');
+    render(); return;
+  }
+  if (action === 'volver-a-proyecto') {
+    state.ecosistemaActivo = null; localStorage.removeItem('pautador_ecosistema_activo');
+    state.modoActivo = null; localStorage.removeItem('pautador_modo_activo');
+    state.proyectoActivo = null; localStorage.removeItem('pautador_proyecto_activo');
+    render(); prepararPantallaProyecto(); return;
+  }
+  if (action === 'cerrar-sesion') {
+    ['pautador_usuario_id', 'pautador_superadmin_id', 'pautador_proyecto_activo', 'pautador_modo_activo', 'pautador_ecosistema_activo'].forEach((k) => localStorage.removeItem(k));
+    state.usuarioActualId = null; state.proyectoActivo = null; state.modoActivo = null; state.ecosistemaActivo = null;
+    location.href = location.pathname; return;
+  }
   if (action === 'elegir-modo') { elegirModo(id); return; }
   if (action === 'elegir-ecosistema') { elegirEcosistema(id); return; }
   if (action === 'cambiar-de-proyecto') { cambiarDeProyecto(); return; }
@@ -6305,7 +6374,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   // Panel Usuarios: rol/habilitado/accesos del usuario seleccionado — se
   // acumulan en state.usuEdit y recién van al server con "Guardar".
-  if (e.target.id === 'hist-activo') { state.historial.activo = e.target.value; render(); return; }
+  if (/^hist-(proyecto|activo|canal|plataforma|estado|eje|creador)$/.test(e.target.id || '')) { state.historial[e.target.id.slice(5)] = e.target.value; render(); return; }
   // Pestaña Creatividades: filtros.
   if (e.target.id === 'crea-proyecto') { state.creaFiltro.proyecto = e.target.value; state.creaFiltro.campana = ''; renderTabCreatividades(); return; }
   if (e.target.id === 'crea-campana') { state.creaFiltro.campana = e.target.value; renderTabCreatividades(); return; }
