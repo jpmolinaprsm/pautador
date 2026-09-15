@@ -13,6 +13,7 @@ const metaApi = require('./metaApi');
 const { subirMaterial, coincideProporcion } = require('./metaMedia');
 const { nomenclaturaCampania, nomenclaturaAdset, nomenclaturaCreative } = require('./nomenclatura');
 const { getTargetingDeSavedAudience } = require('./metaAudiencias');
+const { utmTagsMeta, tieneUtms } = require('./utms');
 
 // "Facebook,Instagram" / "feed,stories" → ["Facebook","Instagram"] / etc.
 // Vacío si no hay nada elegido (pedidos viejos, o "Público" que todavía no
@@ -405,6 +406,10 @@ async function crearCreative(pauta, ctx, postIdOverride) {
   const creative = await metaApi.graphPost(`/${ctx.activo.ad_account_id}/adcreatives`, {
     name: `${nombre} - creative`,
     ...(ctx.activo.authorization_category ? { authorization_category: ctx.activo.authorization_category } : {}),
+    // UTMs (usuario, 2026-09-15): solo si hay link de destino y no trae las
+    // suyas. url_tags vive en el creative: Meta las pega al hacer click y el
+    // link de la pieza queda limpio; utm_campaign = {{ad.id}}. Ver services/utms.js.
+    ...(pauta.link_destino && !tieneUtms(pauta.link_destino) ? { url_tags: utmTagsMeta() } : {}),
     ...creativePayload,
   });
   return creative.id;

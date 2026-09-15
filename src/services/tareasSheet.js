@@ -14,6 +14,7 @@ const env = require('../config/env');
 const { readTable, updateRow } = require('./dataSource');
 const { getActivoPorKey } = require('./configActivos');
 const sheets = require('./sheets');
+const { agregarUtms } = require('./utms');
 
 // Orden EXACTO de columnas de la hoja "Tareas" (= CodigosContenido).
 const HEADERS = ['Fecha', 'Proyecto', 'Codigo', 'Tipo', 'Activo', 'Eje', 'Campana',
@@ -97,9 +98,12 @@ function duracionDias(inicio, fin) {
   return Math.max(0, Math.round((b - a) / 86400000));
 }
 
-// Columnas extra de una pauta, en el orden de HEADERS_TAREAS_EXTRA.
-function columnasExtra(pauta) {
-  return [fechaHoja(pauta.fecha_inicio), fechaHoja(pauta.fecha_fin), pauta.link_destino || '', duracionDias(pauta.fecha_inicio, pauta.fecha_fin)];
+// Columnas extra de una pauta, en el orden de HEADERS_TAREAS_EXTRA. El link
+// de destino va con utm_source de ESA plataforma y utm_medium=paid, listo
+// para que el implementador lo copie — ver services/utms.js.
+function columnasExtra(pauta, plataforma) {
+  const link = pauta.link_destino ? agregarUtms(pauta.link_destino, plataforma) : '';
+  return [fechaHoja(pauta.fecha_inicio), fechaHoja(pauta.fecha_fin), link, duracionDias(pauta.fecha_inicio, pauta.fecha_fin)];
 }
 let columnasFechasOk = false;
 async function asegurarColumnasFechas() {
@@ -128,7 +132,7 @@ async function replicarATareas(correlationId) {
   // Duración (usuario, 2026-09-15: "eso es central en el flujo") — columnas
   // al final de la hoja, que se crean solas la primera vez. CodigosContenido
   // sigue con las 30 de AppSheet (esa hoja va a BigQuery).
-  const filas = plataformas.map((p) => [...armarFila(pauta, p, activo, tipo), ...columnasExtra(pauta)]);
+  const filas = plataformas.map((p) => [...armarFila(pauta, p, activo, tipo), ...columnasExtra(pauta, p)]);
 
   try {
     await asegurarColumnasFechas();
