@@ -2546,8 +2546,12 @@ async function cargarProyectosPanel() {
 function renderProyectosPanel() {
   const cont = document.getElementById('usu-proyectos');
   if (!cont) return;
-  const todos = state.usuProyectos || [];
-  if (!todos.length) { cont.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500)">Cargando proyectos…</p>'; return; }
+  // Solo los que cumplen los requisitos para prenderse (usuario, 2026-09-15):
+  // Activos en la hoja Proyectos y con al menos un activo cargado. Los demás
+  // no se pueden prender, así que no se listan.
+  const todos = (state.usuProyectos || []).filter((p) => p.activoEnCatalogo && p.tieneActivos);
+  if (!(state.usuProyectos || []).length) { cont.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500)">Cargando proyectos…</p>'; return; }
+  if (!todos.length) { cont.innerHTML = '<p style="font-size:13px;color:var(--color-neutral-500)">Ningún proyecto cumple los requisitos (Activo en la hoja Proyectos y con activos cargados).</p>'; return; }
   const fecha = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '—');
   const filtro = (state.usuProyectosFiltro || '').trim().toLowerCase();
   const soloVisibles = !!state.usuProyectosSoloVisibles;
