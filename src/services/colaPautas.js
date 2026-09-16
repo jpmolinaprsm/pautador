@@ -1,6 +1,30 @@
 const { readTable } = require('./dataSource');
 const { getAudienciasParaResolver } = require('./audiencias');
 
+// Días que va a correr el conjunto — MISMA regla que usa metaAdapterReal al
+// crear el adset (si no hay fecha_fin: inicio + duracion_dias del activo, o 7).
+// Tiene que coincidir, porque de esto depende el mínimo que exige Meta.
+//
+// El "+1" no es un redondeo: el adset arranca a las 00:00:00 del día de
+// inicio y termina a las 23:59:59 del día de fin, así que del 8 al 15 corre
+// 8 días, no 7. Verificado contra Meta: para esas fechas pidió $12.027,75,
+// que es exactamente min_daily_budget ($1.503,47) × 8.
+function diasDeDuracion(pauta, activo) {
+  // Si la fecha de inicio ya pasó, Meta no la "recupera": el conjunto corre
+  // desde hoy hasta el fin. Contar desde la fecha original sobrestimaba la
+  // duración (y con eso el mínimo, bloqueando pautas que sí entraban).
+  const hoy = new Date().toISOString().slice(0, 10);
+  const inicioPedido = pauta.fecha_inicio || pauta.fecha;
+  const inicio = inicioPedido && inicioPedido > hoy ? inicioPedido : hoy;
+
+  if (pauta.fecha_fin && inicio) {
+    const ms = new Date(`${pauta.fecha_fin}T00:00:00-0300`) - new Date(`${inicio}T00:00:00-0300`);
+    const dias = Math.round(ms / 86400000);
+    if (dias >= 0) return dias + 1;
+  }
+  return (Number(activo && activo.duracion_dias) || 7) + 1;
+}
+
 // AppSheet separa multipicks con "," o "~" según el campo — aceptamos los dos.
 function parseLista(valor) {
   if (!valor) return [];
@@ -224,6 +248,7 @@ module.exports = {
   getPendientes,
   getPautaPorId,
   getMatrizParaPauta,
+  diasDeDuracion,
   resolverAudiencia,
   limpiarNombreAudiencia,
   parseLista,

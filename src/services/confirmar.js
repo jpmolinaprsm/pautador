@@ -10,8 +10,9 @@
 
 const env = require('../config/env');
 const { readTable, appendRow, updateRow, updateRowWhere } = require('./dataSource');
-const { getPautaPorId, getMatrizParaPauta, ESTADO_DESESTIMADA, ESTADO_DEVUELTA_PM, ESTADOS_YA_RESUELTOS } = require('./colaPautas');
+const { getPautaPorId, getMatrizParaPauta, diasDeDuracion, ESTADO_DESESTIMADA, ESTADO_DEVUELTA_PM, ESTADOS_YA_RESUELTOS } = require('./colaPautas');
 const { getActivoPorKey } = require('./configActivos');
+const { getLimitesCuenta, minimoPorConjunto } = require('./metaLimites');
 const metaAdapter = require('./metaAdapter');
 const { nomenclaturaCampania, nomenclaturaAdset } = require('./nomenclatura');
 
@@ -101,6 +102,15 @@ async function confirmarPauta(correlationId, celdasEditadas, confirmadoPor) {
   }
 
   const { equivObjetivo, equivTipo, formato, activo, plataformasResueltas } = await resolverEquivalencias(pauta);
+  // Mínimo que exige Meta por conjunto — mismo criterio que items.js (así la
+  // pantalla avisa lo mismo que después va a pasar acá). Si el % que le
+  // tocó a una celda no llega, YA NO se manda así no más para que Meta la
+  // rechace: sale con el mínimo (usuario, 2026-09-16 — "que se divida por
+  // debajo del mínimo, que salga con el mínimo"). Ver el aviso ANTES de
+  // confirmar en avisoMinimo()/renderDistribuirPresupuestoV2() (app.js).
+  const diasConfirmar = diasDeDuracion(pauta, activo);
+  const limitesConfirmar = await getLimitesCuenta(activo && activo.ad_account_id);
+  const minPorConjunto = minimoPorConjunto(limitesConfirmar, diasConfirmar);
   // formato va en el contexto porque define el placement (Feed vs Reels).
   // estadoInicial: la ingesta automática (origen 'ingesta') sale con
   // INGESTA_ESTADO_INICIAL; los pedidos automatizados de la pantalla con
@@ -168,7 +178,16 @@ async function confirmarPauta(correlationId, celdasEditadas, confirmadoPor) {
 
   const resultado = [];
   for (const celda of celdasFinales) {
-    const monto = Math.round((matrizOriginal.presupuestoTotal * celda.porcentaje) / 100);
+    // Si el % que le tocó a esta celda no llega al mínimo que exige Meta por
+    // conjunto, sale igual pero con el mínimo (usuario, 2026-09-16: "que se
+    // divida por debajo del mínimo, que salga con el mínimo") — antes se
+    // mandaba el monto exacto del reparto y Meta rechazaba esa celda sola.
+    // La pantalla ya avisa esto ANTES de confirmar con el mismo cálculo
+    // (avisoMinimo/renderDistribuirPresupuestoV2 en app.js).
+    const montoDelReparto = Math.round((matrizOriginal.presupuestoTotal * celda.porcentaje) / 100);
+    const monto = (!celda.audiencia.manual && minPorConjunto && celda.porcentaje > 0 && montoDelReparto < minPorConjunto)
+      ? Math.round(minPorConjunto)
+      : montoDelReparto;
     const nombreAdset = nomenclaturaAdset(pauta, celda, activo);
 
     // Celda en 0% = "esta combinación no va". Pasa siempre que se usa

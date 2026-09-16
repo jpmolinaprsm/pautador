@@ -6,7 +6,7 @@
 // cualquier fila sin otro fetch.
 
 const { readTable } = require('./dataSource');
-const { getMatrizParaPauta, esParaMeta, ESTADO_PEDIDO_PENDIENTE } = require('./colaPautas');
+const { getMatrizParaPauta, diasDeDuracion, esParaMeta, ESTADO_PEDIDO_PENDIENTE } = require('./colaPautas');
 const { getActivoPorKey } = require('./configActivos');
 const { proyectosPermitidos, tieneAccesoAActivo } = require('./usuarios');
 const { getLimitesCuenta, minimoPorConjunto } = require('./metaLimites');
@@ -16,30 +16,6 @@ const { ESTADO_DESESTIMADA, ESTADO_DEVUELTA_PM } = require('./colaPautas');
 // crear el pedido). Para Oculto/Dark el Material es un link de Drive y la
 // miniatura la arma material.js — la misma que usa el preview del pedido.
 const { previewDesdeMaterial } = require('./material');
-
-// Días que va a correr el conjunto — MISMA regla que usa metaAdapterReal al
-// crear el adset (si no hay fecha_fin: inicio + duracion_dias del activo, o 7).
-// Tiene que coincidir, porque de esto depende el mínimo que exige Meta.
-//
-// El "+1" no es un redondeo: el adset arranca a las 00:00:00 del día de
-// inicio y termina a las 23:59:59 del día de fin, así que del 8 al 15 corre
-// 8 días, no 7. Verificado contra Meta: para esas fechas pidió $12.027,75,
-// que es exactamente min_daily_budget ($1.503,47) × 8.
-function diasDeDuracion(pauta, activo) {
-  // Si la fecha de inicio ya pasó, Meta no la "recupera": el conjunto corre
-  // desde hoy hasta el fin. Contar desde la fecha original sobrestimaba la
-  // duración (y con eso el mínimo, bloqueando pautas que sí entraban).
-  const hoy = new Date().toISOString().slice(0, 10);
-  const inicioPedido = pauta.fecha_inicio || pauta.fecha;
-  const inicio = inicioPedido && inicioPedido > hoy ? inicioPedido : hoy;
-
-  if (pauta.fecha_fin && inicio) {
-    const ms = new Date(`${pauta.fecha_fin}T00:00:00-0300`) - new Date(`${inicio}T00:00:00-0300`);
-    const dias = Math.round(ms / 86400000);
-    if (dias >= 0) return dias + 1;
-  }
-  return (Number(activo && activo.duracion_dias) || 7) + 1;
-}
 
 async function getItemCompleto(pauta, matrizDistribucionCache, equivTipo) {
   const matriz = await getMatrizParaPauta(pauta);

@@ -1285,9 +1285,11 @@ function renderCarriles(vm, confirmando) {
   return `<div>${bloqueAuto}${bloqueManual}</div>`;
 }
 
-// Meta rechaza el conjunto si su presupuesto no supera min_daily_budget × días
-// (verificado contra la API real). Como es por conjunto, repartir poco entre
-// muchas celdas falla — mejor avisarlo acá que comerse el error al confirmar.
+// Meta exige min_daily_budget × días POR conjunto. Si el reparto le deja
+// menos a una celda, ya no se rechaza (usuario, 2026-09-16): sale igual pero
+// con el mínimo — confirmar.js hace el ajuste real al publicar. Este aviso
+// es el "antes de salir": avisa ACÁ, antes de confirmar, que esas celdas van
+// a gastar más de lo que dice el reparto.
 function avisoMinimo(vm) {
   if (!vm.minPorConjunto) return '';
   const flojas = vm.combos.filter((c) => c.bajoMinimo).length;
@@ -1296,7 +1298,7 @@ function avisoMinimo(vm) {
     <div style="margin-top:12px;padding:10px 12px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);font-size:12px;color:var(--color-neutral-300)">
       <strong>${flojas} ${flojas === 1 ? 'conjunto queda' : 'conjuntos quedan'} bajo el mínimo de Meta.</strong>
       Para ${vm.diasDuracion} día(s) de duración, Meta pide más de ${esc(vm.minPorConjuntoLabel)} <em>por conjunto</em> (cada celda es un conjunto).
-      Si confirmás así, Meta va a rechazar ${flojas === 1 ? 'esa celda' : 'esas celdas'}: subí el presupuesto del contenido, acortá la duración, o concentrá el reparto en menos celdas.
+      Si confirmás así, ${flojas === 1 ? 'esa celda va' : 'esas celdas van'} a salir igual, pero con el mínimo de Meta en vez del % que le tocó en el reparto — el gasto real de este contenido va a ser un poco mayor al presupuesto cargado.
     </div>`;
 }
 
@@ -3931,6 +3933,7 @@ function cambiarModoCargaV2(modo) {
 function crearPiezaVaciaV2(audienciaCodigo) {
   return {
     modoMaterial: 'link', postSeleccionado: null, audienciaCodigo: audienciaCodigo || '', otraAudienciaTexto: '',
+    linea: '', copy: '',
     carrusel: [{ valor: '', archivo: null, subiendo: false, error: null }, { valor: '', archivo: null, subiendo: false, error: null }],
     materialStoriesModo: 'link', materialStoriesArchivo: null, materialStoriesSubiendo: false, materialStoriesError: null,
     reparto: null, repartoExcluidos: {}, repartoBloqueados: {}, repartoClaves: null, repartoAbierto: false,
@@ -4633,31 +4636,41 @@ function renderDistribuirPresupuestoV2(i) {
     +     '<span>' + esc(fmtMoney(presupuesto)) + '</span>'
     +   '</div>'
     +   (ok ? '' : '<div style="font-size:12px;color:var(--color-neutral-400);margin-top:6px">Tiene que sumar 100% para poder crear.</div>')
-    +   (flojas ? '<div style="font-size:12px;color:var(--color-neutral-300);margin-top:8px;padding:8px 10px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md)"><strong>' + flojas + ' conjunto(s) bajo el mínimo de Meta.</strong> Para ' + dias + ' día(s) Meta pide más de ' + esc(fmtMoney(minPorConjunto)) + ' por conjunto: si publicás así, va a rechazar esos.</div>' : '')
+    +   (flojas ? '<div style="font-size:12px;color:var(--color-neutral-300);margin-top:8px;padding:8px 10px;border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md)"><strong>' + flojas + ' conjunto(s) bajo el mínimo de Meta.</strong> Para ' + dias + ' día(s) Meta pide más de ' + esc(fmtMoney(minPorConjunto)) + ' por conjunto: si confirmás así, van a salir igual pero con el mínimo de Meta en vez del % del reparto — el gasto real va a ser un poco mayor al presupuesto cargado.</div>' : '')
     + '</div>';
 }
 
 // Línea/Audiencia/Material/Copy son lo único que varía por pieza — el resto
 // (Objetivo/Formato/Red/Placement/Link de destino/Tipo) es compartido, ver
-// Módulos 1-4. La Audiencia arranca precargada con la del Módulo 2, pero se
-// puede pisar por pieza (mismo criterio que renderItemBulk en v1).
+// Módulos 1-4. La Audiencia es siempre la del Módulo 2 (ver audienciaBloque
+// más abajo — dejó de poder pisarse por pieza, compañeros 2026-09-16).
 function renderItemBulkV2(i) {
   const prefix = `pd2bulk${i}`;
   const item = state.pd2BulkItems[i];
   // Youtube: el "Copy" es el título y la descripción del video (usuario,
   // 2026-09-15) — en la hoja sigue yendo como Copy.
   const esYoutube = (plataformaPd2Actual().nombres || []).includes('Youtube');
+  // item.copy/item.linea se sincronizan desde el DOM antes de cualquier
+  // redibujado (ver sincronizarBulkAudienciasDesdeDOMV2) — sin esto, subir
+  // el material de OTRO contenido reconstruía todas las tarjetas y el Copy
+  // ya tipeado en las demás se perdía, porque el <textarea> nacía vacío
+  // siempre (reporte de compañeros, 2026-09-16).
   const copyBloque = state.pd2Visibilidad === 'DARK'
-    ? `<div class="field" style="grid-column:1 / -1"><label>${esYoutube ? 'Copy / Título y Descripción' : 'Copy'}</label><textarea class="input" id="${prefix}-copy" rows="2" placeholder="${esYoutube ? 'Título y descripción del video' : 'Texto del anuncio'}"></textarea></div>`
+    ? `<div class="field" style="grid-column:1 / -1"><label>${esYoutube ? 'Copy / Título y Descripción' : 'Copy'}</label><textarea class="input" id="${prefix}-copy" rows="2" placeholder="${esYoutube ? 'Título y descripción del video' : 'Texto del anuncio'}">${esc(item.copy || '')}</textarea></div>`
     : '';
   // Con una sola pieza, la audiencia es la general del Módulo 2 — no se
-  // vuelve a pedir. Con 2 o más, cada pieza puede tener una distinta.
+  // vuelve a pedir. Con 2 o más, se muestra igual (para que quede claro cuál
+  // es) pero YA NO se puede cambiar por contenido (compañeros, 2026-09-16):
+  // siempre es la del Módulo 2, acá solo en modo lectura.
+  const audienciaGeneralEl = document.getElementById('pd2-audiencia');
+  const audienciaGeneral = audienciaGeneralEl ? audienciaGeneralEl.value : (state.pd2AudienciaCodigo || '');
+  const otraAudienciaGeneralEl = document.getElementById('pd2-otra-audiencia');
   const audienciaBloque = state.pd2BulkItems.length < 2 ? '' : `<div class="field">
-      <label>Audiencia principal <span style="font-weight:400;color:var(--color-neutral-500)">(si es distinta a la general)</span></label>
+      <label>Audiencia principal <span style="font-weight:400;color:var(--color-neutral-500)">(la misma para todos los contenidos — se define en el módulo 2)</span></label>
       <div style="display:flex;gap:8px;align-items:flex-start">
-        <div style="flex:1;min-width:0">${renderAudienciaSelect(`${prefix}-audiencia`, state.pdAudiencias, item.audienciaCodigo || '')}</div>
-        <div id="${prefix}-otra-audiencia-wrap" style="flex:1;min-width:0" ${item.audienciaCodigo === 'Otra' ? '' : 'hidden'}>
-          <input class="input" id="${prefix}-otra-audiencia" placeholder="Descripción de la audiencia" value="${esc(item.otraAudienciaTexto || '')}">
+        <div style="flex:1;min-width:0">${renderAudienciaSelect(`${prefix}-audiencia`, state.pdAudiencias, audienciaGeneral).replace('<select ', '<select disabled title="La Audiencia es la misma para todos los contenidos — se cambia en el módulo 2." ')}</div>
+        <div id="${prefix}-otra-audiencia-wrap" style="flex:1;min-width:0" ${audienciaGeneral === 'Otra' ? '' : 'hidden'}>
+          <input class="input" id="${prefix}-otra-audiencia" disabled value="${esc(otraAudienciaGeneralEl ? otraAudienciaGeneralEl.value : '')}">
         </div>
       </div>
     </div>`;
@@ -4679,7 +4692,7 @@ function renderItemBulkV2(i) {
     <div class="card" style="gap:12px">
       <div class="card-title" style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">Contenido N°${i + 1} <span id="${prefix}-nombre" style="font-weight:400;font-size:12px;color:var(--color-neutral-500)" title="Así se va a llamar este contenido (Campaña, Línea y Formato)">${esc(nombreContenidoV2(i))}</span></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
-        <div class="field"><label>Línea <span style="font-weight:400;color:var(--color-neutral-500)">(opcional)</span></label><input class="input" id="${prefix}-linea"></div>
+        <div class="field"><label>Línea <span style="font-weight:400;color:var(--color-neutral-500)">(opcional)</span></label><input class="input" id="${prefix}-linea" value="${esc(item.linea || '')}"></div>
         ${audienciaBloque}
         ${presupuestoBloque}
         <div class="field" style="grid-column:1 / -1"><label>Material</label><div id="${prefix}-material-wrap">${renderMaterialBulkV2(i)}</div></div>
@@ -4718,8 +4731,9 @@ function actualizarNombresContenidoV2() {
 // (renderDistribuirPresupuesto/renderAvisoPresupuesto en cada 'change'/
 // 'click' del formulario), pero acá corre por pieza.
 function recalcularPiezasV2() {
-  if (!state.pd2ModoDirecto) return;
-  state.pd2BulkItems.forEach((item, i) => renderDistribuirPresupuestoV2(i));
+  if (state.pd2ModoDirecto) state.pd2BulkItems.forEach((item, i) => renderDistribuirPresupuestoV2(i));
+  // renderAvisoPresupuestoV2 hace también de "actualizar botón" para Pedido
+  // de Pauta (no ModoDirecto) — ver su primera línea.
   renderAvisoPresupuestoV2();
 }
 
@@ -4727,7 +4741,7 @@ function recalcularPiezasV2() {
 // mínimo de Meta o tiene un reparto que no suma 100% — mismo criterio que
 // renderAvisoPresupuesto()/repartoInvalido() en v1, evaluado por pieza.
 function renderAvisoPresupuestoV2() {
-  if (!state.pd2ModoDirecto) return;
+  if (!state.pd2ModoDirecto) { actualizarBotonBulkV2(); return; }
   let algunaFalla = false;
   state.pd2BulkItems.forEach((item, i) => {
     const el = document.getElementById(`pd2bulk${i}-aviso-presupuesto`);
@@ -4755,25 +4769,59 @@ function renderAvisoPresupuestoV2() {
     }
     if (repartoInvalidoV2(i)) algunaFalla = true;
   });
-  const btn = document.getElementById('pd2-bulk-crear');
-  if (btn && !state.pd2BulkEnviando && !state.pd2BulkVerificando) btn.disabled = algunaFalla;
+  actualizarBotonBulkV2(algunaFalla);
 }
 
-// La Audiencia principal de cada pieza vive en el DOM mientras se edita —
-// hay que volcarla a estado ANTES de cualquier renderBulkItemsV2(), o ese
-// mismo redibujado la pisa (mismo motivo que sincronizarBulkAudienciasDesdeDOM
-// en v1).
+// Único lugar que toca pd2-bulk-crear: texto ("Ver preview" vs "Confirmar")
+// y disabled. Antes cada punto que invalidaba el preview (subir un archivo
+// corregido, cambiar un link, etc.) dejaba el botón como había quedado la
+// última vez — si esa última vez fue "con bloqueo", quedaba apagado para
+// siempre aunque el problema ya estuviera corregido (reporte de compañeros,
+// 2026-09-16). Ahora se recalcula acá cada vez que algo cambia (ver
+// renderBulkItemsV2/renderResultadoBulkV2/renderAvisoPresupuestoV2).
+// algunaFallaPresupuesto: solo lo manda renderAvisoPresupuestoV2 (Crear
+// Anuncios) — Pedido de Pauta no tiene ese chequeo, el servidor resuelve el
+// presupuesto solo.
+function actualizarBotonBulkV2(algunaFallaPresupuesto) {
+  const btn = document.getElementById('pd2-bulk-crear');
+  if (!btn || state.pd2BulkEnviando || state.pd2BulkVerificando) return;
+  const listo = !!(state.pd2BulkPreviews && state.pd2BulkPreviews.length && state.pd2BulkPreviews.every((p) => p.ok));
+  btn.textContent = listo ? (state.pd2BulkItems.length > 1 ? 'Confirmar pedidos' : 'Confirmar pedido') : 'Ver preview';
+  // Con un bloqueo de specs vigente el botón queda apagado: no tiene sentido
+  // dejar que lo intente si Meta lo va a rechazar (enviarBulkV2 lo vuelve a
+  // chequear por las dudas). "Vigente" = del preview actual, no de uno viejo
+  // — en cuanto se edita algo, pd2BulkPreviews se anula (ver
+  // invalidarPreviewsPiezasV2 y el listener de pd2bulk*-material) y este
+  // chequeo deja de aplicar solo.
+  const conBloqueoVigente = !!(state.pd2BulkPreviews && state.pd2BulkPreviews.some((p) => p.ok && p.bloqueos && p.bloqueos.length));
+  btn.disabled = !!algunaFallaPresupuesto || conBloqueoVigente;
+}
+
+// Línea/Copy/Audiencia de cada pieza viven en el DOM mientras se editan —
+// hay que volcarlos a estado ANTES de cualquier renderBulkItemsV2(), o ese
+// mismo redibujado los pisa (mismo motivo que sincronizarBulkAudienciasDesdeDOM
+// en v1). Copy en particular: el <textarea> se reconstruye sin este volcado
+// previo cada vez que se sube el material de OTRO contenido, y sin guardar
+// el valor acá se perdía lo ya tipeado (reporte de compañeros, 2026-09-16).
 function sincronizarBulkAudienciasDesdeDOMV2() {
   state.pd2BulkItems.forEach((item, i) => {
     const sel = document.getElementById(`pd2bulk${i}-audiencia`);
     if (sel) item.audienciaCodigo = sel.value;
     const otra = document.getElementById(`pd2bulk${i}-otra-audiencia`);
     if (otra) item.otraAudienciaTexto = otra.value;
+    const linea = document.getElementById(`pd2bulk${i}-linea`);
+    if (linea) item.linea = linea.value;
+    const copy = document.getElementById(`pd2bulk${i}-copy`);
+    if (copy) item.copy = copy.value;
   });
 }
 
 function renderBulkItemsV2() {
   document.getElementById('pd2-bulk-items').innerHTML = state.pd2BulkItems.map((item, i) => renderItemBulkV2(i)).join('');
+  // Cualquier redibujado de las tarjetas puede venir de corregir algo que
+  // tenía el botón apagado (ver actualizarBotonBulkV2) — se recalcula acá,
+  // no solo cuando se pide "Ver preview" de nuevo.
+  recalcularPiezasV2();
 }
 
 // Campos del Módulo 1-4 (compartidos por todas las piezas de la tanda) —
@@ -5085,10 +5133,8 @@ async function verificarMaterialesBulkV2(ctxParam) {
 
   state.pd2BulkPreviews = previews;
   state.pd2BulkVerificando = false;
-  // Con un bloqueo de specs el botón queda apagado: no tiene sentido dejar
-  // que lo intente si Meta lo va a rechazar (enviarBulkV2 lo vuelve a
-  // chequear por las dudas).
-  btn.disabled = previews.some((p) => p.ok && p.bloqueos && p.bloqueos.length);
+  // El disabled/texto del botón se recalculan acá adentro (ver
+  // actualizarBotonBulkV2) según lo que acaba de quedar en pd2BulkPreviews.
   renderResultadoBulkV2();
 }
 
@@ -5198,7 +5244,7 @@ function renderPreviewsBulkV2() {
   const tarjetas = previews.map(function (p) {
     if (!p.ok) {
       return '<div style="border:1px solid var(--color-warning, #d08a1e);border-radius:var(--radius-md);padding:14px;font-size:12px;color:var(--color-neutral-300)">'
-        + (unaSola ? '' : '<strong>Pieza ' + (p.i + 1) + '</strong><br>') + esc(p.error) + '</div>';
+        + (unaSola ? '' : '<strong>Contenido ' + (p.i + 1) + '</strong><br>') + esc(p.error) + '</div>';
     }
     // Specs (evaluarSpecsPieza): los bloqueos van en rojo y frenan el
     // "Crear"; los avisos son recomendaciones, se muestran y se puede seguir.
@@ -5235,9 +5281,13 @@ function renderPreviewsBulkV2() {
       linkDestino: p.tipo === 'publicación existente' ? '' : linkDestino,
     })).join('<div style="height:10px"></div>');
     const extras = medidasHtml + bloqueosHtml + avisosHtml;
-    return unaSola
-      ? '<div>' + post + extras + '</div>'
-      : ('<div>' + post + '<div style="font-size:11px;color:var(--color-neutral-500);margin-top:4px">Pieza ' + (p.i + 1) + '</div>' + extras + '</div>');
+    // Con bloqueos (medida que Meta va a rechazar) el rótulo tiene que
+    // saltar a la vista — antes era una leyenda chica gris, igual a la de
+    // un contenido sin ningún problema, y con varios contenidos juntos no
+    // quedaba claro cuál tenía el error (compañeros, 2026-09-16).
+    const tieneBloqueos = !!(p.bloqueos && p.bloqueos.length);
+    const etiqueta = unaSola ? '' : ('<div style="font-size:' + (tieneBloqueos ? '12px' : '11px') + ';font-weight:' + (tieneBloqueos ? '700' : '400') + ';color:' + (tieneBloqueos ? 'var(--color-error, #c0392b)' : 'var(--color-neutral-500)') + ';margin-top:4px">' + (tieneBloqueos ? '<i class="ph ph-warning-circle"></i> ' : '') + 'Contenido ' + (p.i + 1) + (tieneBloqueos ? ': medida rechazada' : '') + '</div>');
+    return '<div>' + post + etiqueta + extras + '</div>';
   }).join('');
 
   const fallan = previews.filter(function (p) { return !p.ok; }).length;
@@ -5356,11 +5406,8 @@ function renderResultadoBulkV2() {
   }
   document.getElementById('pd2-bulk-resultado').innerHTML = renderPreviewsBulkV2() + filas + nota;
 
-  const btn = document.getElementById('pd2-bulk-crear');
   const listo = !!(state.pd2BulkPreviews && state.pd2BulkPreviews.length && state.pd2BulkPreviews.every((p) => p.ok));
-  if (btn && !state.pd2BulkEnviando && !state.pd2BulkVerificando) {
-    btn.textContent = listo ? (state.pd2BulkItems.length > 1 ? 'Confirmar pedidos' : 'Confirmar pedido') : 'Ver preview';
-  }
+  recalcularPiezasV2();
   bloquearFormularioV2(listo);
 }
 

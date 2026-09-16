@@ -123,7 +123,7 @@
         </div>
         <div class="tabs" id="pd2-modo-carga-wrap" style="padding:0;border:none" hidden>
           <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="anuncios" id="pd2-modo-carga-anuncios-label">Pedido de Anuncios</button>
-          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="csv">Cargar CSV</button>
+          <button type="button" class="tab-btn" data-action="pd2-modo-carga" data-id="csv" disabled title="Pausado por ahora — se re-habilita cuando lo confirmen." style="opacity:.45;cursor:not-allowed">Cargar CSV</button>
         </div>
       </div>
 
@@ -144,9 +144,9 @@
           <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px" id="pd2-card-anuncios-titulo">Pedido de Anuncios</div>
           <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Un contenido o varios juntos.</div>
         </button>
-        <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" style="padding:22px 20px;text-align:left">
+        <button type="button" class="pedido-card" data-action="pd2-modo-carga" data-id="csv" disabled title="Pausado por ahora — se re-habilita cuando lo confirmen." style="padding:22px 20px;text-align:left;opacity:.45;cursor:not-allowed">
           <i class="ph ph-table" style="font-size:26px;color:var(--color-accent)"></i>
-          <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px">Cargar CSV</div>
+          <div style="font-family:var(--font-heading);font-size:15px;margin-top:10px">Cargar CSV <span style="font-weight:400;font-size:11px">(pausado)</span></div>
           <div style="font-size:12px;color:var(--color-neutral-500);margin-top:4px">Para casos especiales: subí un CSV con varios contenidos juntos.</div>
         </button>
       </div>
