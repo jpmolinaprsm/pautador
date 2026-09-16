@@ -3993,7 +3993,7 @@ const ICONO_PLATAFORMA = { Meta: 'ph-meta-logo', Youtube: 'ph-youtube-logo', 'Ti
 function iconoPlataforma(nombre) { return ICONO_PLATAFORMA[nombre] || 'ph-megaphone'; }
 const FORMATO_GENERICO_UI = { imagen: 'Placa Fija', video: 'Video', carrusel: 'Carrusel' };
 // Orden fijo del desplegable de Formato en Meta (nombres de AppSheet).
-const ORDEN_FORMATOS = ['Placa Fija', 'Placa Animada', 'Video', 'Carrusel'];
+const ORDEN_FORMATOS = ['Placa Fija', 'Imagen', 'Placa Animada', 'Video', 'Carrusel'];
 
 // Las plataformas elegidas, combinadas en una sola "vista" — mismo criterio
 // que combinarPlataformas() en el server: con una sola, sus formatos/

@@ -19,7 +19,7 @@ const PLATAFORMAS = [
     // Con qué Formato de AppSheet se busca la Categoría de Pieza.
     // Formatos con los nombres de AppSheet (usuario, 2026-09-16): Placa Fija
     // = imagen para Meta; Placa Animada y Video = video; Carrusel.
-    categoriaPor: { 'Placa Fija': ['Placa Fija'], 'Placa Animada': ['Placa Animada'], Video: ['Video', 'Reel'], Carrusel: ['Carrusel'] },
+    categoriaPor: { 'Placa Fija': ['Placa Fija'], Imagen: ['Placa Fija'], 'Placa Animada': ['Placa Animada'], Video: ['Video', 'Reel'], Carrusel: ['Carrusel'] },
   },
   {
     nombre: 'Youtube',
@@ -74,7 +74,7 @@ const CATEGORIAS_PIEZA = {
 // elegida, los formatos que se ofrecen son los genéricos (Imagen / Video /
 // Carrusel) que TODAS soportan (ej. Meta + Youtube → solo Video).
 const MODO_POR_FORMATO = {
-  Meta: { 'Placa Fija': 'imagen', 'Placa Animada': 'video', Video: 'video', Carrusel: 'carrusel' },
+  Meta: { 'Placa Fija': 'imagen', Imagen: 'imagen', 'Placa Animada': 'video', Video: 'video', Carrusel: 'carrusel' },
   Youtube: { Bumper: 'video', Shorts: 'video', Video: 'video' },
   'Tik Tok': { Feed: 'video' },
   X: { Carrusel: 'carrusel', Video: 'video', Placa: 'imagen' },
