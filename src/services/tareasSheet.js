@@ -14,7 +14,31 @@ const env = require('../config/env');
 const { readTable, updateRow } = require('./dataSource');
 const { getActivoPorKey } = require('./configActivos');
 const sheets = require('./sheets');
+const storage = require('./storage');
 const { agregarUtms } = require('./utms');
+
+// Un archivo subido a PAUTADOR queda como "creatividad:<id>" (bucket
+// privado) — en Tareas eso no se puede abrir. Se reemplaza por un link
+// firmado que dura lo mismo que la creatividad (CREATIVIDADES_DIAS), para que
+// el implementador baje el archivo (ej. el video para subir a YouTube).
+async function materialLegible(texto) {
+  // Carrusel / varias imágenes vienen separadas por "|" o por salto de línea.
+  const partes = String(texto || '').split(/[\n|]/).filter((s) => s.trim());
+  const salida = [];
+  for (const m of partes) {
+    const ref = m.trim();
+    if (!storage.habilitado() || !storage.esReferencia(ref)) { salida.push(m); continue; }
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const c = await storage.getCreatividad(storage.idDeReferencia(ref));
+      // eslint-disable-next-line no-await-in-loop
+      salida.push(c && !c.borrado_en ? await storage.urlFirmada(c.storage_path, env.creatividadesDias * 86400) : m);
+    } catch (e) {
+      salida.push(m);
+    }
+  }
+  return salida.join('\n');
+}
 
 // Orden EXACTO de columnas de la hoja "Tareas" (= CodigosContenido).
 const HEADERS = ['Fecha', 'Proyecto', 'Codigo', 'Tipo', 'Activo', 'Eje', 'Campana',
@@ -146,6 +170,11 @@ async function replicarATareas(correlationId) {
   const filas = plataformas.map((p) => [...armarFila(pauta, p, activo, tipo), ...columnasExtra(pauta, p)]);
 
   try {
+    const iMaterial = HEADERS.indexOf('Material');
+    for (const fila of filas) {
+      // eslint-disable-next-line no-await-in-loop
+      fila[iMaterial] = await materialLegible(fila[iMaterial]);
+    }
     await asegurarColumnasFechas();
     await sheets.appendRowsTo(env.tareasSheetId, env.tareasHoja, filas);
     await marcar(correlationId, true);
@@ -175,4 +204,4 @@ async function reintentarPendientes() {
   return { reintentadas: pendientes.length, ok };
 }
 
-module.exports = { replicarATareas, reintentarPendientes, asegurarColumnasFechas, HEADERS, HEADERS_TAREAS_EXTRA, armarFila, columnasExtra };
+module.exports = { replicarATareas, reintentarPendientes, asegurarColumnasFechas, HEADERS, HEADERS_TAREAS_EXTRA, armarFila, columnasExtra, materialLegible };

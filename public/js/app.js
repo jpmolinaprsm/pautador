@@ -3839,7 +3839,8 @@ function renderTabPedido2() {
   }
   // Categoría de pieza (por Formato) y Gobernador: solo Pedido Normal.
   const esNormalPd2 = state.modoActivo !== 'automatizado';
-  const categorias = esNormalPd2 && state.pd2Visibilidad === 'DARK' ? ((platInfo.categorias || {})[formatoElegido] || []) : [];
+  // Categoría de pieza: solo canal Informativo (usuario, 2026-09-16).
+  const categorias = esNormalPd2 && state.ecosistemaActivo === 'Informativo' && state.pd2Visibilidad === 'DARK' ? ((platInfo.categorias || {})[formatoElegido] || []) : [];
   const selCat = document.getElementById('pd2-categoria-pieza');
   const catPrevia = selCat.value;
   document.getElementById('pd2-categoria-wrap').hidden = !categorias.length;
@@ -4016,6 +4017,12 @@ function reiniciarMaterialesPiezasV2() {
     item.postSeleccionado = null;
     item.archivoSubido = null;
     item.archivoError = null;
+    item.modoPlat = {};
+    item.archivoPlat = {};
+    // Un link de material de Oculto no sirve como link de publicación de
+    // Público (ni al revés).
+    item.materiales = {};
+    item.materialLink = '';
   });
   state.pd2BulkPreviews = null;
   state.pd2BulkResultados = null;
@@ -4154,7 +4161,10 @@ function renderMaterialOtraPlataformaV2(i, n, sola) {
   const id = idMaterialPlataforma(i, n);
   const previo = (item.materiales && item.materiales[n]) || '';
   if (n === 'Display') {
-    return `<textarea class="input" id="${id}" rows="2" placeholder="Link a la carpeta de Drive o Dropbox con los banners, o un link por línea (una imagen por línea)">${esc(previo.split('|').join('\n'))}</textarea>`;
+    // Display: links (carpeta o uno por línea) o subir las imágenes (varias).
+    const enArchivo = modoArchivoPlataformaV2(item, n);
+    return tabsSubidaPlataformaV2(i, n, enArchivo)
+      + (enArchivo ? renderArchivoPlataformaV2(i, n) : `<textarea class="input" id="${id}" rows="2" placeholder="Link a la carpeta de Drive o Dropbox con los banners, o un link por línea (una imagen por línea)">${esc(previo.split('|').join('\n'))}</textarea>`);
   }
   if (state.pd2Visibilidad === 'PUBLICO') {
     const ej = { Youtube: 'https://www.youtube.com/watch?v=...', 'Tik Tok': 'https://www.tiktok.com/@cuenta/video/...', X: 'https://x.com/cuenta/status/...' }[n] || 'https://...';
@@ -4169,17 +4179,107 @@ function renderMaterialOtraPlataformaV2(i, n, sola) {
     </div>
     ${item.modoMaterial === 'archivo' ? renderMaterialArchivoBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="${n === 'Youtube' ? 'https://www.youtube.com/watch?v=... (video ya subido) o link de Drive' : 'https://drive.google.com/... o dropbox.com/...'}" value="${esc(previo || item.materialLink || '')}">`}`;
   }
-  return `<input class="input" id="${id}" placeholder="${n === 'Youtube' ? 'Link de YouTube (video ya subido) o de Drive' : 'Link de Drive o Dropbox con el material para ' + esc(n)}" value="${esc(previo)}">`;
+  // Varias plataformas juntas (ej. Meta + Youtube): cada una puede subir su
+  // archivo acá mismo, no solo pegar link (usuario, 2026-09-16: "todos los
+  // materiales para todas las plataformas").
+  const enArchivo = modoArchivoPlataformaV2(item, n);
+  return tabsSubidaPlataformaV2(i, n, enArchivo)
+    + (enArchivo ? renderArchivoPlataformaV2(i, n) : `<input class="input" id="${id}" placeholder="${n === 'Youtube' ? 'Link de YouTube (video ya subido) o de Drive' : 'Link de Drive o Dropbox con el material para ' + esc(n)}" value="${esc(previo)}">`);
+}
+
+// Qué acepta la subida por plataforma (misma regla que el servidor:
+// soloVideo en Youtube/Tik Tok, Display solo imágenes y varias).
+const SUBIDA_PLATAFORMA = {
+  Youtube: { accept: 'video/*', tipos: ['video'], label: 'Subir video' },
+  'Tik Tok': { accept: 'video/*', tipos: ['video'], label: 'Subir video' },
+  X: { accept: 'image/*,video/*', tipos: ['imagen', 'video'], label: 'Subir archivo' },
+  Display: { accept: 'image/*', tipos: ['imagen'], label: 'Subir imágenes', multiple: true },
+};
+function modoArchivoPlataformaV2(item, n) {
+  return !!(item.modoPlat && item.modoPlat[n] === 'archivo');
+}
+
+function tabsSubidaPlataformaV2(i, n, enArchivo) {
+  const cfg = SUBIDA_PLATAFORMA[n] || { label: 'Subir archivo' };
+  return `
+    <div class="tabs" style="padding:0;border:none;margin-bottom:8px">
+      <button type="button" class="tab-btn ${enArchivo ? '' : 'active'}" data-action="pd2bulk-modo-material-plat" data-index="${i}" data-plat="${esc(n)}" data-id="link">Pegar link</button>
+      <button type="button" class="tab-btn ${enArchivo ? 'active' : ''}" data-action="pd2bulk-modo-material-plat" data-index="${i}" data-plat="${esc(n)}" data-id="archivo">${esc(cfg.label)}</button>
+    </div>`;
+}
+
+function renderArchivoPlataformaV2(i, n) {
+  const item = state.pd2BulkItems[i];
+  const cfg = SUBIDA_PLATAFORMA[n] || { accept: 'image/*,video/*' };
+  const est = (item.archivoPlat && item.archivoPlat[n]) || {};
+  const subidos = est.subidos || [];
+  const lista = subidos.map((a, k) => {
+    const peso = a.bytes >= 1024 * 1024 ? (a.bytes / (1024 * 1024)).toFixed(1) + ' MB' : Math.max(1, Math.round(a.bytes / 1024)) + ' KB';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--color-divider);border-radius:var(--radius-md);margin-bottom:6px">'
+      + '<i class="ph ph-check-circle" style="color:var(--color-accent-2-600)"></i>'
+      + '<div style="flex:1;font-size:13px">' + esc(a.nombreOriginal) + ' <span style="color:var(--color-neutral-500)">— ' + (a.tipo === 'video' ? 'Video' : 'Imagen') + ' · ' + peso + '</span></div>'
+      + '<button type="button" class="btn btn-secondary" data-action="pd2bulk-archivo-plat-quitar" data-index="' + i + '" data-plat="' + esc(n) + '" data-sub="' + k + '" style="font-size:12px;padding:4px 10px">Quitar</button>'
+      + '</div>';
+  }).join('');
+  const subiendo = est.subiendo ? '<div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--color-neutral-400);margin-bottom:6px"><span class="spinner-inline"></span>Subiendo…</div>' : '';
+  // Uno solo por plataforma, salvo Display (varias imágenes).
+  const puedeSumar = !est.subiendo && (cfg.multiple || !subidos.length);
+  const input = puedeSumar
+    ? `<input class="input" type="file" id="${idMaterialPlataforma(i, n)}-archivo" data-index="${i}" data-plat="${esc(n)}" data-archivo-plat="1" accept="${cfg.accept}" ${cfg.multiple ? 'multiple' : ''}>`
+    : '';
+  return lista + subiendo + input + (est.error ? '<div class="error" style="margin-top:6px">' + esc(est.error) + '</div>' : '');
+}
+
+function renderMaterialWrapV2(i) {
+  sincronizarBulkAudienciasDesdeDOMV2();
+  const wrap = document.getElementById(`pd2bulk${i}-material-wrap`);
+  if (wrap) wrap.innerHTML = renderMaterialBulkV2(i);
+}
+
+async function subirArchivoPlataformaV2(i, n, files) {
+  const item = state.pd2BulkItems[i];
+  if (!item || !files.length) return;
+  const cfg = SUBIDA_PLATAFORMA[n] || { tipos: ['imagen', 'video'] };
+  item.archivoPlat = item.archivoPlat || {};
+  const est = item.archivoPlat[n] = Object.assign({ subidos: [] }, item.archivoPlat[n], { subiendo: true, error: null });
+  renderMaterialWrapV2(i);
+  const errores = [];
+  for (const file of files) {
+    const form = new FormData();
+    form.append('archivo', file);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await apiFetch('/api/material/subir', { method: 'POST', body: form });
+      // eslint-disable-next-line no-await-in-loop
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detalle || data.error);
+      if (!cfg.tipos.includes(data.tipo)) throw new Error(`${n} solo acepta ${cfg.tipos.join(' o ')}, y esto es ${data.tipo || 'otro tipo de archivo'}.`);
+      const subido = Object.assign({ nombreOriginal: file.name }, data);
+      est.subidos = cfg.multiple ? est.subidos.concat(subido) : [subido];
+    } catch (err) {
+      errores.push(`${file.name}: ${err.message}`);
+    }
+  }
+  est.subiendo = false;
+  est.error = errores.join(' · ') || null;
+  invalidarPreviewsPiezasV2();
+  renderMaterialWrapV2(i);
+  recalcularPiezasV2();
 }
 
 // Lee el material tipeado para una plataforma que no es Meta (o el archivo
-// subido, si es la única plataforma y eligió "Subir archivo").
+// subido, si es la única plataforma y eligió "Subir archivo", o si eligió
+// "Subir video" en su fila).
 function leerMaterialPlataformaV2(i, n, sola) {
   const item = state.pd2BulkItems[i];
   if (sola && n !== 'Display' && state.pd2Visibilidad !== 'PUBLICO') {
     if (item.modoMaterial === 'archivo') return item.archivoSubido ? item.archivoSubido.material : '';
     const el = document.getElementById(`pd2bulk${i}-material`);
     return el ? el.value.trim() : '';
+  }
+  if ((state.pd2Visibilidad !== 'PUBLICO' || n === 'Display') && modoArchivoPlataformaV2(item, n)) {
+    const est = (item.archivoPlat && item.archivoPlat[n]) || {};
+    return (est.subidos || []).map((a) => a.material).filter(Boolean).join('|');
   }
   const el = document.getElementById(idMaterialPlataforma(i, n));
   if (!el) return '';
@@ -4857,6 +4957,14 @@ function sincronizarBulkAudienciasDesdeDOMV2() {
     // input nacía vacío de nuevo si no se guardaba antes acá.
     const material = document.getElementById(`pd2bulk${i}-material`);
     if (material) item.materialLink = material.value;
+    // Links de las demás plataformas (fila por plataforma): mismo motivo.
+    plataformasPd2().forEach((n) => {
+      if (n === 'Meta') return;
+      const el = document.getElementById(idMaterialPlataforma(i, n));
+      if (!el) return;
+      item.materiales = item.materiales || {};
+      item.materiales[n] = el.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).join('|');
+    });
   });
 }
 
@@ -4907,6 +5015,9 @@ function materialesPiezaV2(i, item, materialCarrusel, materialInput) {
   const out = {};
   plats.forEach((n) => {
     if (n === 'Meta') out.Meta = materialMetaPiezaV2(i, item, materialCarrusel, materialInput);
+    // Con "Subir video" elegido manda el archivo (o nada): un link tipeado
+    // antes en esa fila no tiene que colarse.
+    else if ((n === 'Display' || (state.pd2Visibilidad !== 'PUBLICO' && plats.length > 1)) && modoArchivoPlataformaV2(item, n)) out[n] = leerMaterialPlataformaV2(i, n, false);
     else out[n] = (item.materiales && item.materiales[n]) || leerMaterialPlataformaV2(i, n, plats.length === 1);
   });
   return out;
@@ -6499,11 +6610,31 @@ document.addEventListener('click', (e) => {
   if (action === 'pd2bulk-modo-material') {
     const idx = Number(el.dataset.index);
     const item = state.pd2BulkItems[idx];
+    sincronizarBulkAudienciasDesdeDOMV2();
     item.modoMaterial = id;
     (async () => {
       if (id === 'post' && !state.pd2Posts.length && !state.pd2CargandoPosts) await cargarPostsPedidoV2();
-      document.getElementById(`pd2bulk${idx}-material-wrap`).innerHTML = renderMaterialBulkV2(idx);
+      renderMaterialWrapV2(idx);
     })();
+    return;
+  }
+  if (action === 'pd2bulk-modo-material-plat') {
+    const idx = Number(el.dataset.index);
+    const item = state.pd2BulkItems[idx];
+    sincronizarBulkAudienciasDesdeDOMV2();
+    item.modoPlat = item.modoPlat || {};
+    item.modoPlat[el.dataset.plat] = id;
+    invalidarPreviewsPiezasV2();
+    renderMaterialWrapV2(idx);
+    return;
+  }
+  if (action === 'pd2bulk-archivo-plat-quitar') {
+    const idx = Number(el.dataset.index);
+    const item = state.pd2BulkItems[idx];
+    const est = item.archivoPlat && item.archivoPlat[el.dataset.plat];
+    if (est && est.subidos) est.subidos.splice(Number(el.dataset.sub) || 0, 1);
+    invalidarPreviewsPiezasV2();
+    renderMaterialWrapV2(idx);
     return;
   }
   if (action === 'pd2bulk-archivo-quitar') {
@@ -6512,7 +6643,7 @@ document.addEventListener('click', (e) => {
     item.archivoSubido = null;
     item.archivoError = null;
     state.pd2BulkPreviews = null;
-    document.getElementById(`pd2bulk${idx}-material-wrap`).innerHTML = renderMaterialBulkV2(idx);
+    renderMaterialWrapV2(idx);
     return;
   }
   if (action === 'pd2bulk-seleccionar-post') {
@@ -6823,6 +6954,11 @@ document.addEventListener('change', (e) => {
   if (/^pd2bulk\d+-audiencia$/.test(e.target.id)) {
     const otraWrap = document.getElementById(`${e.target.id.replace('-audiencia', '')}-otra-audiencia-wrap`);
     if (otraWrap) otraWrap.hidden = e.target.value !== 'Otra';
+    return;
+  }
+  if (e.target.hasAttribute('data-archivo-plat')) {
+    const archivos = Array.from(e.target.files || []);
+    if (archivos.length) subirArchivoPlataformaV2(Number(e.target.dataset.index), e.target.dataset.plat, archivos);
     return;
   }
   if (e.target.hasAttribute('data-index') && /^pd2bulk\d+-material-archivo$/.test(e.target.id)) {

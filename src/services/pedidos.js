@@ -459,7 +459,8 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     plataforma,
     // Categoría de Pieza y Gobernador (campos de AppSheet, van a la hoja
     // Tareas) — columnas de migration_009, se mandan solo si vienen.
-    ...(datos.categoriaPieza ? { categoria_pieza: String(datos.categoriaPieza).trim() } : {}),
+    // Categoría de Pieza: solo canal Informativo (usuario, 2026-09-16).
+    ...(datos.categoriaPieza && tipoInfo.ecosistema === 'Informativo' ? { categoria_pieza: String(datos.categoriaPieza).trim() } : {}),
     ...(datos.gobernador === true || datos.gobernador === 'Sí' ? { gobernador: 'Sí' } : (datos.gobernador === false || datos.gobernador === 'No' ? { gobernador: 'No' } : {})),
     material: materialFinal,
     copy: copyFinal,
@@ -528,7 +529,8 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // Etiquetas de la creatividad (si el material es "creatividad:<id>"):
   // recién acá se conocen proyecto/activo/código/campaña/eje. Ver storage.js.
   // Carrusel: varios materiales separados por "|" (ver metaAdapterReal.js).
-  const materialesAEtiquetar = [materialFinal, materialStories].filter(Boolean)
+  // Incluye el material de cada plataforma (ej. el video subido para Youtube).
+  const materialesAEtiquetar = [...new Set([materialFinal, materialStories, ...Object.values(materialesPorPlataforma)])].filter(Boolean)
     .flatMap((m) => String(m).split('|').map((s) => s.trim()).filter(Boolean));
   materialesAEtiquetar.forEach((m) => {
     etiquetarCreatividad(m, { proyecto, activo_key: activoKey, codigo, campana, eje: eje.eje, correlation_id: correlationId })
