@@ -13,6 +13,7 @@ const { readTable, insertarFila, updateRow } = require('./dataSource');
 const { filasDesde } = require('./codigosSheet');
 const { getActivos } = require('./configActivos');
 const { tieneAccesoAProyecto, activosPermitidos } = require('./usuarios');
+const { linksDe } = require('./asanaLinks');
 
 function norm(s) {
   return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
@@ -98,6 +99,9 @@ async function getHistorial({ usuario, proyecto, ecosistema }) {
       correlation_id: pauta ? pauta.correlation_id : '',
       marcado_por: marca ? marca.marcado_por : '',
       marcado_en: marca ? marca.marcado_en : '',
+      // Link(s) a la tarea de Asana que dejó Make en la hoja Tareas (uno por
+      // plataforma) — vacío hasta que Make termina de crearla.
+      asana: linksDe(codigo),
     });
   });
   salida.sort((a, b) => (b.fecha > a.fecha ? 1 : b.fecha < a.fecha ? -1 : b.codigo.localeCompare(a.codigo)));

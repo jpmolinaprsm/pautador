@@ -1807,10 +1807,46 @@ function filasHistorialFiltradas() {
     && (!q || [f.codigo, f.campana, f.contenido, f.activo, f.audiencia, f.proyecto].some((v) => String(v || '').toLowerCase().includes(q))));
 }
 
-function tagEstadoHistorial(estado) {
-  if (estado === 'Pautado') return '<span class="tag tag-accent-2">Pautado</span>';
-  if (estado === 'Desestimada') return '<span class="tag tag-neutral">Desestimada</span>';
-  return '<span class="tag tag-outline">Ver en Asana</span>';
+// Links a Asana: los completa Make en la hoja Tareas unos minutos después de
+// cargar el pedido (ver services/asanaLinks.js). Con más de una plataforma
+// hay una tarea por plataforma. data-action="stop-prop": abrir el link no
+// despliega la fila.
+function linksAsanaHistorial(f, compacto) {
+  const links = f.asana || [];
+  const titulo = (a) => 'Abrir la tarea en Asana' + (a.plataforma ? ' (' + esc(a.plataforma) + ')' : '');
+  // En la fila (columna angosta) con varias plataformas: "Asana" + un ícono
+  // por tarea, la plataforma va en el tooltip.
+  if (compacto && links.length > 1) {
+    return '<span class="tag tag-outline" style="white-space:nowrap">Asana'
+      + links.map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" title="${titulo(a)}" style="margin-left:4px;color:inherit"><i class="ph ph-arrow-square-out"></i></a>`).join('')
+      + '</span>';
+  }
+  return links.map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" class="tag tag-outline" style="text-decoration:none;cursor:pointer;white-space:nowrap" title="${titulo(a)}"><i class="ph ph-arrow-square-out"></i> ${compacto ? 'Asana' : esc(a.plataforma || 'Asana')}</a>`).join(' ');
+}
+
+function tagEstadoHistorial(f) {
+  // Pautado/Desestimada también tienen tarea: el link va como ícono al lado.
+  const iconos = (f.asana || []).map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" title="Abrir la tarea en Asana${a.plataforma ? ' (' + esc(a.plataforma) + ')' : ''}" style="margin-left:4px;color:var(--color-accent)"><i class="ph ph-arrow-square-out"></i></a>`).join('');
+  if (f.estado === 'Pautado') return '<span class="tag tag-accent-2">Pautado</span>' + iconos;
+  if (f.estado === 'Desestimada') return '<span class="tag tag-neutral">Desestimada</span>' + iconos;
+  return linksAsanaHistorial(f, true) || '<span class="tag tag-outline" title="La tarea de Asana todavía no se creó">Ver en Asana</span>';
+}
+
+// Historial abierto: se vuelve a pedir solo para que aparezcan los links de
+// Asana sin recargar — cada 2 min de 9 a 18 (hora Argentina), cada 30 fuera
+// de horario (mismo ritmo que el servidor).
+let historialRefrescoTimer = null;
+function programarRefrescoHistorial() {
+  if (historialRefrescoTimer) clearTimeout(historialRefrescoTimer);
+  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
+  const minutos = h >= 9 && h < 18 ? 2 : 30;
+  historialRefrescoTimer = setTimeout(async () => {
+    if (state.tabActiva === 'pendientes' && state.historyOpen && document.visibilityState === 'visible' && pantallaActual() === 'app') {
+      await cargarHistorialSheet();
+      render();
+    }
+    programarRefrescoHistorial();
+  }, minutos * 60 * 1000);
 }
 
 function renderFilaHistorialSheet(f, vms) {
@@ -1827,7 +1863,7 @@ function renderFilaHistorialSheet(f, vms) {
       <div class="row-ellip" style="font-size:12px">${esc(f.plataforma)}</div>
       <div class="row-ellip" style="font-size:12px">${esc(f.objetivo)}</div>
       <div class="row-ellip" style="font-size:12px">${esc(f.audiencia)}</div>
-      <div>${tagEstadoHistorial(f.estado)}</div>
+      <div class="row-ellip">${tagEstadoHistorial(f)}</div>
       <div style="text-align:center"><i class="ph ${expandida ? 'ph-caret-up' : 'ph-caret-down'}"></i></div>
     </div>`;
   let detalle = '';
@@ -1842,7 +1878,8 @@ function renderFilaHistorialSheet(f, vms) {
         <div style="padding:14px 16px 16px 48px;background:var(--color-bg);border-top:1px solid var(--color-divider);font-size:13px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px 20px">
           ${dato('Código', f.codigo)}${dato('Fecha', f.fecha)}${dato('Tipo', f.tipo)}${dato('Eje', f.eje)}${dato('Campaña', f.campana)}${dato('Formato', f.formato)}${dato('Visibilidad', f.visibilidad)}${dato('Plataforma', f.plataforma)}${dato('Objetivo', f.objetivo)}${dato('Audiencia', f.audiencia)}${dato('Cargado por', f.creador)}${f.marcado_por ? dato('Marcado pautado por', f.marcado_por + (f.marcado_en ? ' · ' + String(f.marcado_en).slice(0, 10) : '')) : ''}
           <div style="grid-column:1 / -1;margin-top:8px;display:flex;gap:10px;align-items:center">
-            <span style="color:var(--color-neutral-500)">Cargada por AppSheet — el seguimiento está en Asana.</span>
+            <span style="color:var(--color-neutral-500)">${f.asana && f.asana.length ? 'Seguimiento en Asana:' : 'El seguimiento está en Asana (la tarea todavía no tiene link).'}</span>
+            ${linksAsanaHistorial(f, false)}
             ${puedeMarcar ? `<button class="btn btn-primary" style="font-size:12px;padding:4px 10px" data-action="hist-marcar-pautado" data-id="${esc(f.codigo)}" ${marcando ? 'disabled' : ''}>${marcando ? 'Marcando…' : 'Marcar pautado'}</button>` : ''}
           </div>
         </div>`;
@@ -5391,6 +5428,46 @@ function resetPedidoAnunciosV2() {
   document.getElementById('pd2-campana').value = '';
   document.getElementById('pd2-link-destino').value = '';
   document.getElementById('pd2-comentarios').value = '';
+  // Lo que vive solo en el DOM (tildados de Objetivo/Refuerzo, Formato,
+  // tarjetas de contenidos): renderTabPedido2 lo vuelve a leer de acá, así
+  // que si no se vacía reaparece preseleccionado.
+  ['pd2-bulk-items', 'pd2-bulk-resultado', 'pd2-objetivo-wrap', 'pd2-refuerzo-wrap', 'pd2-formato', 'pd2-categoria-pieza', 'pd2-presupuesto-default'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  });
+  ['pd2-otra-audiencia', 'pd2-otras-refuerzo'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const gob = document.getElementById('pd2-gobernador');
+  if (gob) gob.selectedIndex = 0;
+  ['pd2-modulo-1-error', 'pd2-modulo-2-error', 'pd2-modulo-3-error', 'pd2-modulo-4-error', 'pd2-bulk-error'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  });
+  bloquearFormularioV2(false);
+}
+
+// Cambiar de pestaña, de Proyecto, de modo o de canal deja el pedido en
+// blanco (usuario, 2026-09-16: "no dejar las cosas preseleccionadas"). Además
+// de lo que limpia un pedido exitoso, acá se olvidan Proyecto/Activo/Tipo
+// elegidos, el banner del último resultado y lo cargado por CSV.
+function limpiarFormularioPedidoV2() {
+  if (state.pd2BulkEnviando) return; // un envío en curso termina y muestra su resultado
+  resetPedidoAnunciosV2();
+  state.pd2Proyecto = null;
+  state.pd2ActivoKey = null;
+  state.pd2TipoCodigo = 'D';
+  state.pd2BulkResultados = null;
+  state.pdProyecto = null;
+  state.pdActivoKey = null;
+  state.pdCsvFilas = [];
+  state.pdCsvErrorGeneral = null;
+  const csvPreview = document.getElementById('pd-csv-preview');
+  if (csvPreview) csvPreview.innerHTML = '';
+  const csvArchivo = document.getElementById('pd-csv-archivo');
+  if (csvArchivo) csvArchivo.value = '';
+  renderResultadoFinalV2();
 }
 
 function renderResultadoBulkV2() {
@@ -5556,6 +5633,7 @@ function renderBulkErrorV2() {
 
 function cambiarTab(tab) {
   if (!tabsPermitidas().includes(tab)) return;
+  if (state.tabActiva !== tab) limpiarFormularioPedidoV2();
   state.pd2ModoDirecto = tab === 'crear';
   state.tabActiva = tab;
   document.querySelectorAll('.tab-btn[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
@@ -5735,6 +5813,7 @@ function elegirAdminTodo() {
   state.ecosistemaActivo = 'TODOS'; localStorage.setItem('pautador_ecosistema_activo', 'TODOS');
   state.items = [];
   state.pdProyectos = [];
+  limpiarFormularioPedidoV2();
   state.tabActiva = 'pendientes';
   render();
   avanzarSiCorresponde();
@@ -5829,6 +5908,7 @@ async function entrarAlApp() {
   apiFetch('/api/uso/entrada', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proyecto: state.proyectoActivo, modo: state.modoActivo, canal: state.ecosistemaActivo, pantalla: NOMBRE_PANTALLA[state.tabActiva] || state.tabActiva }) }).catch(() => {});
   cambiarTab(state.tabActiva);
   arrancarLatido();
+  if (!historialRefrescoTimer) programarRefrescoHistorial();
 }
 
 // Presencia en vivo (Panel Usuarios → Uso, "En vivo"): un latido por minuto
@@ -5904,6 +5984,7 @@ function elegirUsuario(id) {
   localStorage.setItem('pautador_usuario_id', id);
   state.items = [];
   state.pdProyectos = [];
+  limpiarFormularioPedidoV2();
   render();
   if (pantallaActual() === 'proyecto') prepararPantallaProyecto();
   else avanzarSiCorresponde();
@@ -5922,6 +6003,7 @@ function elegirProyecto(valor) {
   localStorage.removeItem('pautador_ecosistema_activo');
   state.items = [];
   state.pdProyectos = [];
+  limpiarFormularioPedidoV2();
   render();
   avanzarSiCorresponde();
 }
@@ -5939,6 +6021,7 @@ function elegirModo(valor) {
   // el Proyecto en sí no haya cambiado.
   state.pdTipos = [];
   state.pdProyectos = [];
+  limpiarFormularioPedidoV2();
   render();
   avanzarSiCorresponde();
 }
@@ -5948,6 +6031,7 @@ function elegirEcosistema(valor) {
   localStorage.setItem('pautador_ecosistema_activo', valor);
   state.pdTipos = [];
   state.pdProyectos = [];
+  limpiarFormularioPedidoV2();
   render();
   avanzarSiCorresponde();
 }
@@ -5957,6 +6041,7 @@ function elegirEcosistema(valor) {
 function cambiarDeProyecto() {
   state.proyectoActivo = null;
   localStorage.removeItem('pautador_proyecto_activo');
+  limpiarFormularioPedidoV2();
   render();
   prepararPantallaProyecto();
 }

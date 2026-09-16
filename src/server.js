@@ -109,6 +109,10 @@ app.listen(env.port, () => {
     setInterval(barrer, 24 * 60 * 60 * 1000);
   }
 
+  // Links de Asana (columna que completa Make en la hoja Tareas) para el
+  // Historial: cada 2 min de 9 a 18 (hora Argentina), cada 30 el resto.
+  require('./services/asanaLinks').programarActualizacion();
+
   // Réplica a la hoja "Tareas": reintenta cada 10 min lo que quedó sin
   // escribir (sin Service Account no hace nada).
   if (env.tareasSheetId) {

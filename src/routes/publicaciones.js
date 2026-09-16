@@ -5,6 +5,7 @@ const { limpiarNombreAudiencia } = require('../services/colaPautas');
 const { getCatalogoPorProyecto, usoPorProyectoCanal } = require('../services/audiencias');
 const { buscarUltimoMismoCruce } = require('../services/repartoSugerido');
 
+const MAX_AUDIENCIAS_PEDIDO_MANUAL = 20;
 const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config/mvp');
 const { PLATAFORMAS, MODO_POR_FORMATO, categoriasPara } = require('../config/plataformas');
 const { volumenPorProyectoDesde, filasDesde } = require('../services/codigosSheet');
@@ -374,15 +375,13 @@ router.get('/audiencias', async (req, res) => {
       manual: false,
       usos: 0,
     }));
-    // Pedido Manual: además del activo, TODO el catálogo del Proyecto ×
-    // Canal (Excel "IDs de Auds x Activos", nombres del Excel "Audiencias")
-    // — esas piezas salen a mano. Antes se filtraba a solo las usadas en los
-    // últimos 60 días (tope 20): el usuario pidió mandar TODAS las del Excel
-    // (2026-09-16 — "son 20 por proyecto" es lo que espera el Excel, pero en
-    // los proyectos que agrupan varios activos chicos —ej. Gobierno de
-    // Corrientes— el catálogo combinado es mucho más grande; se manda igual,
-    // sin cortar). El uso de los últimos 60 días se sigue calculando, pero
-    // solo para ordenar (las más usadas primero), ya no para filtrar.
+    // Pedido Manual: además del activo, el catálogo del Proyecto × Canal
+    // (Excel "IDs de Auds x Activos", nombres del Excel "Audiencias") — esas
+    // piezas salen a mano. Regla (usuario, 2026-09-16): las 20 más usadas en
+    // los últimos 60 días; si hay menos de 20 con uso, se completa con el
+    // resto del catálogo (antes se cortaba ahí y en Santa Fe aparecían 4).
+    // En proyectos que agrupan varios activos chicos (ej. Corrientes, 125
+    // en el catálogo) también quedan 20.
     if (req.modoActivo !== 'automatizado' && req.query.activo_key) {
       const activo = await getActivoPorKey(req.query.activo_key);
       const canal = req.ecosistemaActivo === 'Oficial' || req.ecosistemaActivo === 'Informativo' ? req.ecosistemaActivo : null;
@@ -396,6 +395,8 @@ router.get('/audiencias', async (req, res) => {
         const desde = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
         const uso = await usoPorProyectoCanal(activo.proyecto, canal, desde);
         lista.forEach((a) => { a.usos = uso[String(a.codigo).toUpperCase()] || 0; });
+        lista.sort((x, y) => (y.usos - x.usos) || x.nombre.localeCompare(y.nombre, 'es'));
+        lista.splice(MAX_AUDIENCIAS_PEDIDO_MANUAL);
       }
     }
     lista.sort((x, y) => (y.usos - x.usos) || x.nombre.localeCompare(y.nombre, 'es'));

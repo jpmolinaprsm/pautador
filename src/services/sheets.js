@@ -85,6 +85,41 @@ function verificarEscrituraPermitida(spreadsheetId) {
   }
 }
 
+function letraColumna(n) {
+  let s = '';
+  let x = n;
+  while (x > 0) { const m = (x - 1) % 26; s = String.fromCharCode(65 + m) + s; x = Math.floor((x - 1) / 26); }
+  return s;
+}
+
+/**
+ * Lee SOLO algunas columnas (por nombre de encabezado) de una pestaña —
+ * para hojas grandes (Tareas tiene ~20.000 filas × 35 columnas) donde bajar
+ * todo en cada lectura es un desperdicio. Encabezados que no existen vuelven
+ * como ''. Solo lectura.
+ */
+async function readColumns(spreadsheetId, sheetName, encabezados) {
+  const sheets = await getClient();
+  const r = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${sheetName}!1:1` });
+  const actuales = (r.data.values && r.data.values[0]) || [];
+  const presentes = encabezados.filter((h) => actuales.includes(h));
+  if (!presentes.length) return [];
+  const res = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId,
+    ranges: presentes.map((h) => { const l = letraColumna(actuales.indexOf(h) + 1); return `${sheetName}!${l}2:${l}`; }),
+    majorDimension: 'COLUMNS',
+  });
+  const columnas = (res.data.valueRanges || []).map((vr) => (vr.values && vr.values[0]) || []);
+  const largo = Math.max(0, ...columnas.map((c) => c.length));
+  const filas = [];
+  for (let i = 0; i < largo; i += 1) {
+    const obj = {};
+    encabezados.forEach((h) => { const k = presentes.indexOf(h); obj[h] = k >= 0 && columnas[k][i] !== undefined ? columnas[k][i] : ''; });
+    filas.push(obj);
+  }
+  return filas;
+}
+
 /**
  * Lee una pestaña entera de cualquier planilla y la devuelve como array de
  * objetos (primera fila = encabezados), igual que readTable.
@@ -189,4 +224,4 @@ async function updateRowWhere() {
   );
 }
 
-module.exports = { readTable, appendRow, updateRow, updateRowWhere, readRange, appendRowsTo, replaceSheetTo, asegurarEncabezados, verificarEscrituraPermitida };
+module.exports = { readTable, appendRow, updateRow, updateRowWhere, readRange, readColumns, appendRowsTo, replaceSheetTo, asegurarEncabezados, verificarEscrituraPermitida };
