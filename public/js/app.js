@@ -3933,7 +3933,7 @@ function cambiarModoCargaV2(modo) {
 function crearPiezaVaciaV2(audienciaCodigo) {
   return {
     modoMaterial: 'link', postSeleccionado: null, audienciaCodigo: audienciaCodigo || '', otraAudienciaTexto: '',
-    linea: '', copy: '',
+    linea: '', copy: '', materialLink: '',
     carrusel: [{ valor: '', archivo: null, subiendo: false, error: null }, { valor: '', archivo: null, subiendo: false, error: null }],
     materialStoriesModo: 'link', materialStoriesArchivo: null, materialStoriesSubiendo: false, materialStoriesError: null,
     reparto: null, repartoExcluidos: {}, repartoBloqueados: {}, repartoClaves: null, repartoAbierto: false,
@@ -4130,7 +4130,7 @@ function renderMaterialOtraPlataformaV2(i, n, sola) {
       <button type="button" class="tab-btn ${item.modoMaterial !== 'archivo' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="link">Pegar link</button>
       <button type="button" class="tab-btn ${item.modoMaterial === 'archivo' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="archivo">Subir archivo</button>
     </div>
-    ${item.modoMaterial === 'archivo' ? renderMaterialArchivoBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="${n === 'Youtube' ? 'https://www.youtube.com/watch?v=... (video ya subido) o link de Drive' : 'https://drive.google.com/... o dropbox.com/...'}" value="${esc(previo)}">`}`;
+    ${item.modoMaterial === 'archivo' ? renderMaterialArchivoBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="${n === 'Youtube' ? 'https://www.youtube.com/watch?v=... (video ya subido) o link de Drive' : 'https://drive.google.com/... o dropbox.com/...'}" value="${esc(previo || item.materialLink || '')}">`}`;
   }
   return `<input class="input" id="${id}" placeholder="${n === 'Youtube' ? 'Link de YouTube (video ya subido) o de Drive' : 'Link de Drive o Dropbox con el material para ' + esc(n)}" value="${esc(previo)}">`;
 }
@@ -4185,7 +4185,7 @@ function renderMaterialMetaV2(i) {
     // contra Meta — solo el link, y la pieza se carga a mano.
     return `
       <label style="font-size:12px;color:var(--color-neutral-500);display:block;margin-bottom:6px">Link de la publicación <span style="font-weight:400">(esta página no está vinculada a la App: la pieza se carga a mano)</span></label>
-      <input class="input" id="${prefix}-material" placeholder="https://www.facebook.com/... o instagram.com/p/...">
+      <input class="input" id="${prefix}-material" placeholder="https://www.facebook.com/... o instagram.com/p/..." value="${esc(item.materialLink || '')}">
     `;
   }
   if (state.pd2Visibilidad === 'PUBLICO') {
@@ -4194,7 +4194,7 @@ function renderMaterialMetaV2(i) {
         <button type="button" class="tab-btn ${item.modoMaterial === 'post' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="post">Elegir publicación</button>
         <button type="button" class="tab-btn ${item.modoMaterial === 'link' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="link">Pegar link</button>
       </div>
-      ${item.modoMaterial === 'post' ? renderSelectorPostsBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="https://...">`}
+      ${item.modoMaterial === 'post' ? renderSelectorPostsBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="https://..." value="${esc(item.materialLink || '')}">`}
     `;
   }
   const formatoInfoActual = formatoInfoPd2Actual();
@@ -4208,7 +4208,7 @@ function renderMaterialMetaV2(i) {
       <button type="button" class="tab-btn ${item.modoMaterial !== 'archivo' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="link">Pegar link</button>
       <button type="button" class="tab-btn ${item.modoMaterial === 'archivo' ? 'active' : ''}" data-action="pd2bulk-modo-material" data-index="${i}" data-id="archivo">Subir archivo</button>
     </div>
-    ${item.modoMaterial === 'archivo' ? renderMaterialArchivoBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="${aceptaLinkYoutubePd2() ? 'https://www.youtube.com/watch?v=... (video ya subido) o link de Drive' : 'https://drive.google.com/... o dropbox.com/...'}">`}
+    ${item.modoMaterial === 'archivo' ? renderMaterialArchivoBulkV2(i) : `<input class="input" id="${prefix}-material" placeholder="${aceptaLinkYoutubePd2() ? 'https://www.youtube.com/watch?v=... (video ya subido) o link de Drive' : 'https://drive.google.com/... o dropbox.com/...'}" value="${esc(item.materialLink || '')}">`}
   `;
 }
 
@@ -4813,6 +4813,13 @@ function sincronizarBulkAudienciasDesdeDOMV2() {
     if (linea) item.linea = linea.value;
     const copy = document.getElementById(`pd2bulk${i}-copy`);
     if (copy) item.copy = copy.value;
+    // El link de material (Meta o "una sola plataforma no-Meta") vive en
+    // este mismo input siempre, sea cual sea el modo — mismo bug reportado
+    // por compañeros con Copy: pegar un link de Drive en el contenido 1 y
+    // subir un ARCHIVO en el contenido 2 reconstruye las tarjetas y ese
+    // input nacía vacío de nuevo si no se guardaba antes acá.
+    const material = document.getElementById(`pd2bulk${i}-material`);
+    if (material) item.materialLink = material.value;
   });
 }
 
