@@ -308,7 +308,11 @@ router.get('/siguiente-codigo', async (req, res) => {
 // app.js y placementDisponible en metaAdapterReal.js).
 router.get('/formatos', async (req, res) => {
   try {
-    const formatos = await readTable('equiv_formato');
+    // Orden fijo con los nombres de AppSheet (2026-09-16): Placa Fija,
+    // Placa Animada, Video, Carrusel; cualquier otro al final.
+    const ORDEN = ['Placa Fija', 'Placa Animada', 'Video', 'Carrusel'];
+    const pos = (v) => { const i = ORDEN.indexOf(v); return i < 0 ? 99 : i; };
+    const formatos = (await readTable('equiv_formato')).sort((a, b) => pos(a.appsheet_valor) - pos(b.appsheet_valor));
     res.json(formatos.map((f) => ({
       appsheet_valor: f.appsheet_valor,
       modo: f.modo,

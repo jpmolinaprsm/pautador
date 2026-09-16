@@ -429,7 +429,9 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   const codigo = datos.codigoExterno
     ? String(datos.codigoExterno).trim()
     : await generarSiguienteCodigo(proyecto, ejeCodigo, tipoCodigo);
-  const formatoFinal = visibilidad === 'DARK' ? formato : 'Post existente';
+  // Público también trae Formato desde la pantalla (compañeros, 2026-09-16):
+  // arma el nombre del contenido. La ingesta no lo manda → "Post existente".
+  const formatoFinal = formato || (visibilidad === 'DARK' ? '' : 'Post existente');
   // Misma fórmula que AppSheet para "Contenido" (ver Campos Appsheet.xlsx):
   // Campana + (Linea entre comillas, si hay) + " (Formato)".
   const lineaLimpia = (linea || '').trim();

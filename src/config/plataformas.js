@@ -17,7 +17,9 @@ const PLATAFORMAS = [
     objetivos: null,
     placements: true,
     // Con qué Formato de AppSheet se busca la Categoría de Pieza.
-    categoriaPor: { Imagen: ['Placa Fija', 'Placa Animada'], Video: ['Video', 'Reel'], Carrusel: ['Carrusel'] },
+    // Formatos con los nombres de AppSheet (usuario, 2026-09-16): Placa Fija
+    // = imagen para Meta; Placa Animada y Video = video; Carrusel.
+    categoriaPor: { 'Placa Fija': ['Placa Fija'], 'Placa Animada': ['Placa Animada'], Video: ['Video', 'Reel'], Carrusel: ['Carrusel'] },
   },
   {
     nombre: 'Youtube',
@@ -72,13 +74,13 @@ const CATEGORIAS_PIEZA = {
 // elegida, los formatos que se ofrecen son los genéricos (Imagen / Video /
 // Carrusel) que TODAS soportan (ej. Meta + Youtube → solo Video).
 const MODO_POR_FORMATO = {
-  Meta: { Imagen: 'imagen', Video: 'video', Carrusel: 'carrusel' },
+  Meta: { 'Placa Fija': 'imagen', 'Placa Animada': 'video', Video: 'video', Carrusel: 'carrusel' },
   Youtube: { Bumper: 'video', Shorts: 'video', Video: 'video' },
   'Tik Tok': { Feed: 'video' },
   X: { Carrusel: 'carrusel', Video: 'video', Placa: 'imagen' },
   Display: { Banner: 'imagen' },
 };
-const FORMATO_GENERICO = { imagen: 'Imagen', video: 'Video', carrusel: 'Carrusel' };
+const FORMATO_GENERICO = { imagen: 'Placa Fija', video: 'Video', carrusel: 'Carrusel' };
 
 function getPlataforma(nombre) {
   return PLATAFORMAS.find((p) => p.nombre === nombre) || null;

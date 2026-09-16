@@ -58,7 +58,10 @@ async function resolverEquivalencias(pauta) {
     getActivoPorKey(pauta.activo),
   ]);
 
-  const formato = equivFormato.find((f) => f.appsheet_valor === pauta.formato);
+  // "Imagen" pasó a llamarse "Placa Fija" (2026-09-16): las pautas viejas
+  // se resuelven igual.
+  const formato = equivFormato.find((f) => f.appsheet_valor === pauta.formato)
+    || (pauta.formato === 'Imagen' ? equivFormato.find((f) => f.appsheet_valor === 'Placa Fija') : undefined);
 
   return { equivObjetivo, equivTipo, formato, activo, plataformasResueltas: derivarPlataformasResueltas(activo) };
 }

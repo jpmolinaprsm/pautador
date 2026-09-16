@@ -3772,7 +3772,9 @@ function renderTabPedido2() {
   const selVis = document.getElementById('pd2-visibilidad');
   selVis.value = state.pd2Visibilidad;
   selVis.disabled = !tienePublicoPd2;
-  document.getElementById('pd2-formato-wrap').hidden = state.pd2Visibilidad !== 'DARK';
+  // El Formato se pide también en Público (compañeros, 2026-09-16): arma el
+  // nombre del contenido y la Categoría de pieza; antes quedaba "(Publicación)".
+  document.getElementById('pd2-formato-wrap').hidden = false;
   const formatoPrevio = document.getElementById('pd2-formato') ? document.getElementById('pd2-formato').value : '';
   const formatosPd2 = formatosPd2Disponibles();
   document.getElementById('pd2-formato').innerHTML = formatosPd2.map((f) => `<option value="${esc(f.appsheet_valor)}" ${f.appsheet_valor === formatoPrevio ? 'selected' : ''}>${esc(f.appsheet_valor)}</option>`).join('');
@@ -3857,7 +3859,7 @@ function moduloValido(n) {
   }
   if (n === 4) {
     const plat = plataformaPd2Actual();
-    if (state.pd2Visibilidad === 'DARK' && !document.getElementById('pd2-formato').value) return 'Elegí el Formato.';
+    if (!document.getElementById('pd2-formato').value) return 'Elegí el Formato.';
     if (plat.esMeta && state.pd2Visibilidad === 'DARK' && !state.pd2Placements.length) return 'Elegí al menos un Placement.';
     if (plat.requiereLink && !document.getElementById('pd2-link-destino').value.trim()) return `En ${plat.nombre} el Link de destino es obligatorio.`;
     return null;
@@ -3989,7 +3991,9 @@ function formatoInfoPd2Actual() {
 
 const ICONO_PLATAFORMA = { Meta: 'ph-meta-logo', Youtube: 'ph-youtube-logo', 'Tik Tok': 'ph-tiktok-logo', X: 'ph-x-logo', Display: 'ph-monitor' };
 function iconoPlataforma(nombre) { return ICONO_PLATAFORMA[nombre] || 'ph-megaphone'; }
-const FORMATO_GENERICO_UI = { imagen: 'Imagen', video: 'Video', carrusel: 'Carrusel' };
+const FORMATO_GENERICO_UI = { imagen: 'Placa Fija', video: 'Video', carrusel: 'Carrusel' };
+// Orden fijo del desplegable de Formato en Meta (nombres de AppSheet).
+const ORDEN_FORMATOS = ['Placa Fija', 'Placa Animada', 'Video', 'Carrusel'];
 
 // Las plataformas elegidas, combinadas en una sola "vista" — mismo criterio
 // que combinarPlataformas() en el server: con una sola, sus formatos/
@@ -4049,7 +4053,7 @@ function renderGrillaPlataformas() {
       + '</button>';
   }).join('');
   const comb = plataformaPd2Actual();
-  const formatosComunes = comb.formatos ? comb.formatos.map((f) => f.appsheet_valor) : ['Imagen', 'Video', 'Carrusel'];
+  const formatosComunes = comb.formatos ? comb.formatos.map((f) => f.appsheet_valor) : ORDEN_FORMATOS;
   const nota = document.getElementById('pd2-plataforma-nota');
   if (!state.pd2Plataformas.length) nota.textContent = 'Elegí al menos una plataforma.';
   else if (state.pd2Plataformas.length > 1) nota.textContent = formatosComunes.length ? ('Formatos en común: ' + formatosComunes.join(' · ') + (comb.objetivos ? ' — objetivos: ' + comb.objetivos.join(' · ') : '')) : 'Estas plataformas no comparten ningún formato — sacá alguna.';
@@ -4698,7 +4702,7 @@ function nombreContenidoV2(i) {
   const formatoEl = document.getElementById('pd2-formato');
   const campana = (campanaEl ? campanaEl.value : '').trim();
   const linea = (lineaEl ? lineaEl.value : '').trim();
-  const formato = state.pd2Visibilidad === 'PUBLICO' ? 'Publicación' : ((formatoEl && formatoEl.value) || '').trim();
+  const formato = ((formatoEl && formatoEl.value) || '').trim();
   return `${campana || 'Campaña'}${linea ? ` "${linea}"` : ''}${formato ? ` (${formato})` : ''}`;
 }
 
