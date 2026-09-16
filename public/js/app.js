@@ -1768,7 +1768,7 @@ function render() {
 // "Desestimada". Una fila que creó PAUTADOR se expande con el detalle de
 // siempre (preview, reparto, Ads Manager); una de AppSheet muestra la ficha
 // y "Marcar pautado".
-const COLS_HISTORIAL_SHEET = '32px 88px 130px minmax(0,0.9fr) minmax(0,1.6fr) 90px minmax(0,0.8fr) minmax(0,0.9fr) 110px 24px';
+const COLS_HISTORIAL_SHEET = '32px 88px 130px minmax(0,0.9fr) minmax(0,1.6fr) 90px minmax(0,0.8fr) minmax(0,0.9fr) 130px 24px';
 
 async function cargarHistorialSheet() {
   state.historial.cargando = true;
@@ -1817,11 +1817,11 @@ function linksAsanaHistorial(f, compacto) {
   // En la fila (columna angosta) con varias plataformas: "Asana" + un ícono
   // por tarea, la plataforma va en el tooltip.
   if (compacto && links.length > 1) {
-    return '<span class="tag tag-outline" style="white-space:nowrap">Asana'
+    return '<span class="tag tag-outline" style="white-space:nowrap">Ver en Asana'
       + links.map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" title="${titulo(a)}" style="margin-left:4px;color:inherit"><i class="ph ph-arrow-square-out"></i></a>`).join('')
       + '</span>';
   }
-  return links.map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" class="tag tag-outline" style="text-decoration:none;cursor:pointer;white-space:nowrap" title="${titulo(a)}"><i class="ph ph-arrow-square-out"></i> ${compacto ? 'Asana' : esc(a.plataforma || 'Asana')}</a>`).join(' ');
+  return links.map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" class="tag tag-outline" style="text-decoration:none;cursor:pointer;white-space:nowrap" title="${titulo(a)}"><i class="ph ph-arrow-square-out"></i> ${compacto ? 'Ver en Asana' : 'Ver en Asana' + (a.plataforma ? ' · ' + esc(a.plataforma) : '')}</a>`).join(' ');
 }
 
 function tagEstadoHistorial(f) {
@@ -1829,7 +1829,7 @@ function tagEstadoHistorial(f) {
   const iconos = (f.asana || []).map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" title="Abrir la tarea en Asana${a.plataforma ? ' (' + esc(a.plataforma) + ')' : ''}" style="margin-left:4px;color:var(--color-accent)"><i class="ph ph-arrow-square-out"></i></a>`).join('');
   if (f.estado === 'Pautado') return '<span class="tag tag-accent-2">Pautado</span>' + iconos;
   if (f.estado === 'Desestimada') return '<span class="tag tag-neutral">Desestimada</span>' + iconos;
-  return linksAsanaHistorial(f, true) || '<span class="tag tag-outline" title="La tarea de Asana todavía no se creó">Ver en Asana</span>';
+  return linksAsanaHistorial(f, true) || '<span class="tag tag-neutral" title="Make todavía no dejó el link de la tarea en la hoja (o es un pedido anterior a esa columna)">Sin link a Asana</span>';
 }
 
 // Historial abierto: se vuelve a pedir solo para que aparezcan los links de
@@ -1878,7 +1878,7 @@ function renderFilaHistorialSheet(f, vms) {
         <div style="padding:14px 16px 16px 48px;background:var(--color-bg);border-top:1px solid var(--color-divider);font-size:13px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px 20px">
           ${dato('Código', f.codigo)}${dato('Fecha', f.fecha)}${dato('Tipo', f.tipo)}${dato('Eje', f.eje)}${dato('Campaña', f.campana)}${dato('Formato', f.formato)}${dato('Visibilidad', f.visibilidad)}${dato('Plataforma', f.plataforma)}${dato('Objetivo', f.objetivo)}${dato('Audiencia', f.audiencia)}${dato('Cargado por', f.creador)}${f.marcado_por ? dato('Marcado pautado por', f.marcado_por + (f.marcado_en ? ' · ' + String(f.marcado_en).slice(0, 10) : '')) : ''}
           <div style="grid-column:1 / -1;margin-top:8px;display:flex;gap:10px;align-items:center">
-            <span style="color:var(--color-neutral-500)">${f.asana && f.asana.length ? 'Seguimiento en Asana:' : 'El seguimiento está en Asana (la tarea todavía no tiene link).'}</span>
+            <span style="color:var(--color-neutral-500)">${f.asana && f.asana.length ? 'Seguimiento en Asana:' : 'Todavía no hay link a la tarea de Asana.'}</span>
             ${linksAsanaHistorial(f, false)}
             ${puedeMarcar ? `<button class="btn btn-primary" style="font-size:12px;padding:4px 10px" data-action="hist-marcar-pautado" data-id="${esc(f.codigo)}" ${marcando ? 'disabled' : ''}>${marcando ? 'Marcando…' : 'Marcar pautado'}</button>` : ''}
           </div>

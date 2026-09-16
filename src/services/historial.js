@@ -73,7 +73,10 @@ async function getHistorial({ usuario, proyecto, ecosistema }) {
     }
     vistos.add(codigo);
     const marca = marcaPorCodigo.get(codigo);
-    let estado = 'Ver en Asana';
+    const asana = linksDe(codigo);
+    // "Ver en Asana" solo si hay link de verdad (usuario, 2026-09-16: era
+    // confuso que dijera eso sin llevar a ningún lado).
+    let estado = asana.length ? 'Ver en Asana' : 'Sin link a Asana';
     if (pauta && pauta.estado === 'desestimada') estado = 'Desestimada';
     else if (pauta && (pauta.estado === 'manual_hecha' || publicadas.has(pauta.correlation_id))) estado = 'Pautado';
     else if (marca && marca.estado === 'pautado') estado = 'Pautado';
@@ -101,7 +104,7 @@ async function getHistorial({ usuario, proyecto, ecosistema }) {
       marcado_en: marca ? marca.marcado_en : '',
       // Link(s) a la tarea de Asana que dejó Make en la hoja Tareas (uno por
       // plataforma) — vacío hasta que Make termina de crearla.
-      asana: linksDe(codigo),
+      asana,
     });
   });
   salida.sort((a, b) => (b.fecha > a.fecha ? 1 : b.fecha < a.fecha ? -1 : b.codigo.localeCompare(a.codigo)));
