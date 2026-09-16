@@ -174,6 +174,17 @@ async function procesarFilas(hoja, filas) {
       continue;
     }
 
+    // Fila a medio cargar (en el Sheet se escribe celda por celda y el
+    // webhook avisa en cada cambio): si falta alguna columna que define la
+    // pauta, se espera a la próxima pasada sin anotar nada — si no, una fila
+    // con Duración vacía saldría con 1 día por default (usuario, 2026-09-16).
+    const faltan = ['Codigo', 'Eje', 'Objetivo', 'Audiencia', 'Duracion'].filter((c) => !limpio(fila[c]));
+    if (!limpio(fila['Link FB'] || fila.fb_post)) faltan.push('Link FB');
+    if (faltan.length) {
+      resultados.push({ fila_id: filaId, estado: 'incompleta', error: `todavía sin ${faltan.join(', ')} — se reintenta en la próxima pasada` });
+      continue;
+    }
+
     try {
       const datos = filaAPedido(hoja, fila, ejes);
       // eslint-disable-next-line no-await-in-loop
