@@ -113,6 +113,13 @@ app.listen(env.port, () => {
   // Historial: cada 2 min de 9 a 18 (hora Argentina), cada 30 el resto.
   require('./services/asanaLinks').programarActualizacion();
 
+  // Cola de envío a Meta: lo que quedó en cola en la corrida anterior se
+  // retoma (ver services/colaEnvio.js).
+  setTimeout(() => {
+    require('./services/colaEnvio').recuperarPendientes(require('./services/pedidos').terminarPedidoDesdeFila)
+      .catch((e) => console.warn('[cola-envio] no pude retomar la cola:', e.message));
+  }, 5 * 1000);
+
   // Réplica a la hoja "Tareas": reintenta cada 10 min lo que quedó sin
   // escribir (sin Service Account no hace nada).
   if (env.tareasSheetId) {

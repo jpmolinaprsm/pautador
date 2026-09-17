@@ -77,7 +77,9 @@ async function getHistorial({ usuario, proyecto, ecosistema }) {
     // "Ver en Asana" solo si hay link de verdad (usuario, 2026-09-16: era
     // confuso que dijera eso sin llevar a ningún lado).
     let estado = asana.length ? 'Ver en Asana' : 'Sin link a Asana';
-    if (pauta && pauta.estado === 'desestimada') estado = 'Desestimada';
+    if (pauta && (pauta.envio === 'en_cola' || pauta.envio === 'creando')) estado = 'Enviando';
+    else if (pauta && pauta.envio === 'error') estado = 'Error de envío';
+    else if (pauta && pauta.estado === 'desestimada') estado = 'Desestimada';
     else if (pauta && (pauta.estado === 'manual_hecha' || publicadas.has(pauta.correlation_id))) estado = 'Pautado';
     else if (marca && marca.estado === 'pautado') estado = 'Pautado';
 

@@ -10,6 +10,12 @@
 //
 //   node supabase/seed_audiencias_catalogo.js --dry   -> solo muestra el resumen
 //   node supabase/seed_audiencias_catalogo.js         -> borra y recarga la tabla
+//
+// OJO (2026-09-17): los nombres de audiencias_catalogo y equiv_audiencia se
+// normalizaron A MANO desde la pestaña "Audiencias nombres" de la planilla
+// de insumos (MEDIA - AUTOMATIZACIONES). Volver a correr este seed PISA esos
+// nombres con los del Excel: si hay que recargar, después hay que volver a
+// aplicar la columna "Nombre normalizado" de esa pestaña.
 const path = require('path');
 const XLSX = require('xlsx');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });

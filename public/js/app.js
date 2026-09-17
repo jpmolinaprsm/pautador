@@ -192,6 +192,11 @@ const state = {
   pd2BulkError: null,
   pd2BulkEnviando: false,
   pd2BulkVerificando: false,
+  // Cuadro "En proceso N/M" (usuario, 2026-09-17): lo que se mandó a la
+  // cola de envío a Meta, leído de GET /api/pedidos/envios. `ocultos` son
+  // los que el usuario ya cerró (localStorage), para que no vuelvan al
+  // recargar.
+  bandeja: { items: [], abierta: false, cargando: false, error: '' },
 
   // Carga por CSV — una fila por pieza, cada una con su propio estado de
   // validación (ver validarFilasCsv/confirmarCargaCsv). No pasa por los
@@ -1655,6 +1660,7 @@ function render() {
   document.getElementById('pantalla-modo').hidden = pantalla !== 'modo';
   document.getElementById('pantalla-ecosistema').hidden = pantalla !== 'ecosistema';
   document.getElementById('app-shell').hidden = pantalla !== 'app';
+  if (pantalla !== 'app') { const b = document.getElementById('bandeja-envios'); if (b) b.hidden = true; }
   if (pantalla === 'login') { renderPantallaLogin(); return; }
   if (pantalla === 'proyecto') { renderPantallaProyecto(); return; }
   if (pantalla === 'modo') { renderPantallaModo(); return; }
@@ -1663,6 +1669,7 @@ function render() {
   renderNavUsuario();
   renderNavContexto();
   renderEditarModal();
+  renderBandeja();
 
   const enPendientes = state.tabActiva === 'pendientes';
   document.getElementById('estado-carga').hidden = !enPendientes || (!state.cargando && !state.error);
@@ -1824,10 +1831,98 @@ function linksAsanaHistorial(f, compacto) {
   return links.map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" class="tag tag-outline" style="text-decoration:none;cursor:pointer;white-space:nowrap" title="${titulo(a)}"><i class="ph ph-arrow-square-out"></i> ${compacto ? 'Ver en Asana' : 'Ver en Asana' + (a.plataforma ? ' · ' + esc(a.plataforma) : '')}</a>`).join(' ');
 }
 
+// ---------- Cuadro "En proceso N/M" (cola de envío a Meta) ----------
+// Se consulta cada 3 s mientras haya algo en cola o creando; si no, nada.
+// Lo terminado queda hasta que se cierra (o una hora, que es lo que trae
+// el servidor). Cerrarlo guarda los ids en localStorage para no volver a
+// mostrarlos al recargar.
+const BANDEJA_OCULTOS_KEY = 'pautador_bandeja_ocultos';
+let bandejaTimer = null;
+function bandejaOcultos() {
+  try { return JSON.parse(localStorage.getItem(BANDEJA_OCULTOS_KEY) || '[]'); } catch (e) { return []; }
+}
+function bandejaItemsVisibles() {
+  const ocultos = new Set(bandejaOcultos());
+  return (state.bandeja.items || []).filter((it) => !ocultos.has(it.correlation_id));
+}
+function bandejaEnProceso() {
+  return bandejaItemsVisibles().some((it) => it.envio === 'en_cola' || it.envio === 'creando');
+}
+async function cargarBandeja() {
+  if (!state.usuarioActualId || pantallaActual() !== 'app') return;
+  try {
+    const r = await apiFetch('/api/pedidos/envios');
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detalle || data.error || 'No se pudo leer la cola.');
+    state.bandeja.items = Array.isArray(data) ? data : [];
+    state.bandeja.error = '';
+  } catch (err) {
+    state.bandeja.error = err.message;
+  }
+  renderBandeja();
+  programarBandeja();
+}
+function programarBandeja() {
+  if (bandejaTimer) clearTimeout(bandejaTimer);
+  bandejaTimer = null;
+  if (!bandejaEnProceso()) return;
+  bandejaTimer = setTimeout(cargarBandeja, 3000);
+}
+function cerrarBandeja() {
+  const ids = bandejaItemsVisibles().filter((it) => it.envio !== 'en_cola' && it.envio !== 'creando').map((it) => it.correlation_id);
+  try { localStorage.setItem(BANDEJA_OCULTOS_KEY, JSON.stringify(bandejaOcultos().concat(ids).slice(-200))); } catch (e) { /* sin localStorage: se vuelve a ver al recargar */ }
+  state.bandeja.abierta = false;
+  renderBandeja();
+}
+function renderBandeja() {
+  const el = document.getElementById('bandeja-envios');
+  if (!el) return;
+  const items = bandejaItemsVisibles();
+  if (!items.length || pantallaActual() !== 'app') { el.hidden = true; return; }
+  el.hidden = false;
+  const listos = items.filter((it) => it.envio === 'listo').length;
+  const errores = items.filter((it) => it.envio === 'error').length;
+  const enProceso = items.length - listos - errores;
+  const color = errores ? 'var(--color-error, #c0392b)' : (enProceso ? 'var(--color-accent)' : 'var(--color-success, #1f8a4c)');
+  const titulo = errores
+    ? `${errores} con error · ${listos + errores}/${items.length}`
+    : (enProceso ? `En proceso ${listos}/${items.length}` : `Listo ${listos}/${items.length}`);
+  const icono = errores ? 'ph-x-circle' : (enProceso ? 'ph-circle-notch' : 'ph-check-circle');
+  const filas = items.map((it) => {
+    let estado;
+    if (it.envio === 'en_cola') estado = '<span class="tag tag-neutral">En cola</span>';
+    else if (it.envio === 'creando') estado = '<span class="tag tag-outline"><span class="spinner-inline"></span> Creando en Meta</span>';
+    else if (it.envio === 'error') estado = '<span class="tag" style="background:var(--color-error, #c0392b);color:#fff">Error</span>';
+    else estado = `<span class="tag tag-accent-2">${it.publicado ? 'Salió' : 'Guardado'}</span>`;
+    const detalle = it.envio === 'error'
+      ? `<div style="color:var(--color-error, #c0392b);margin-top:4px;font-size:12px">${esc(it.envio_error)}</div><div style="margin-top:4px"><button type="button" class="btn btn-ghost" style="font-size:12px;padding:2px 6px" data-action="ir-a-validacion"><i class="ph ph-arrow-right"></i> Ver en Validación</button></div>`
+      : (it.envio === 'listo' && !it.publicado ? '<div style="color:var(--color-neutral-500);margin-top:4px;font-size:12px">Sin publicar en Meta: queda para cargar a mano.</div>' : '');
+    return `<div style="padding:10px 14px;border-top:1px solid var(--color-divider)">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+        <div style="min-width:0"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(it.contenido || it.campana || it.codigo)}</div>
+        <div style="font-family:monospace;font-size:11px;color:var(--color-neutral-500)">${esc(it.codigo)}${it.plataforma && it.plataforma !== 'Meta' ? ' · ' + esc(it.plataforma) : ''}</div></div>
+        <div style="flex:none">${estado}</div>
+      </div>${detalle}</div>`;
+  }).join('');
+  const puedeCerrar = !enProceso;
+  el.style.borderColor = color;
+  el.innerHTML = `
+    <div data-action="bandeja-toggle" style="display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;background:var(--color-bg)">
+      <i class="ph ${icono}" style="font-size:20px;color:${color}"></i>
+      <div style="flex:1;font-family:var(--font-heading);font-size:14px;color:${color}">${esc(titulo)}</div>
+      ${puedeCerrar ? '<button type="button" class="btn btn-ghost" style="font-size:12px;padding:2px 8px" data-action="bandeja-cerrar" title="Sacar del cuadro lo que ya terminó">Cerrar</button>' : ''}
+      <i class="ph ${state.bandeja.abierta ? 'ph-caret-down' : 'ph-caret-up'}"></i>
+    </div>
+    ${state.bandeja.abierta ? `<div style="max-height:50vh;overflow-y:auto">${filas}</div>` : ''}
+    ${state.bandeja.error ? `<div class="error" style="padding:8px 14px;font-size:12px">${esc(state.bandeja.error)}</div>` : ''}`;
+}
+
 function tagEstadoHistorial(f) {
   // Pautado/Desestimada también tienen tarea: el link va como ícono al lado.
   const iconos = (f.asana || []).map((a) => `<a href="${esc(a.link)}" target="_blank" rel="noopener" data-action="stop-prop" title="Abrir la tarea en Asana${a.plataforma ? ' (' + esc(a.plataforma) + ')' : ''}" style="margin-left:4px;color:var(--color-accent)"><i class="ph ph-arrow-square-out"></i></a>`).join('');
   if (f.estado === 'Pautado') return '<span class="tag tag-accent-2">Pautado</span>' + iconos;
+  if (f.estado === 'Enviando') return '<span class="tag tag-outline"><span class="spinner-inline"></span> Enviando a Meta</span>';
+  if (f.estado === 'Error de envío') return '<span class="tag" style="background:var(--color-error, #c0392b);color:#fff" title="Falló el envío a Meta — ver el cuadro de abajo o Validación">Error de envío</span>';
   if (f.estado === 'Desestimada') return '<span class="tag tag-neutral">Desestimada</span>' + iconos;
   return linksAsanaHistorial(f, true) || '<span class="tag tag-neutral" title="Make todavía no dejó el link de la tarea en la hoja (o es un pedido anterior a esa columna)">Sin link a Asana</span>';
 }
@@ -5469,6 +5564,7 @@ function renderPreviewsBulkV2() {
 // AUTOMATIZADO_ESTADO_INICIAL en el server. Los cruces con audiencia "Otra"
 // en Automatizado quedan manual_pendiente (Pendientes de implementadores).
 function estadoResultadoPiezaV2(r) {
+  if (r.enCola) return 'en cola — se está mandando a Meta, seguilo en el cuadro de abajo a la derecha';
   if (r.publicado && r.manuales) return 'publicada en Meta; el cruce con la audiencia "Otra" queda para cargar a mano (Pendientes)';
   if (r.publicado) return 'publicada en Meta';
   if (r.motivo && state.modoActivo === 'automatizado') return 'creada — la audiencia "Otra" no está automatizada: la cargan a mano los implementadores (Pendientes)';
@@ -5675,26 +5771,30 @@ async function enviarBulkV2() {
   state.pd2BulkResultados = [];
   const btn = document.getElementById('pd2-bulk-crear');
   btn.disabled = true;
-  btn.textContent = 'Creando…';
+  btn.textContent = 'Mandando a la cola…';
   renderResultadoBulkV2();
 
-  const endpoint = state.pd2ModoDirecto ? '/api/anuncios/crear-directo' : '/api/pedidos';
-
+  // En cola (usuario, 2026-09-17): el servidor valida y guarda cada
+  // contenido y devuelve al toque; el envío a Meta sigue de fondo y se ve
+  // en el cuadro "En proceso N/M" (ver cargarBandeja). Un error acá es de
+  // validación (no de Meta): el contenido no se guardó.
   for (let i = 0; i < state.pd2BulkItems.length; i++) {
     try {
-      const r = await apiFetch(endpoint, {
+      const r = await apiFetch('/api/pedidos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(armarDatosPiezaV2(i, ctx)),
+        body: JSON.stringify(Object.assign(armarDatosPiezaV2(i, ctx), { enCola: true })),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.detalle || data.error);
-      // Cruces que quedaron para cargar a mano (audiencia "Otra" en
-      // Automatizado): el server los deja manual_pendiente; si TODA la
-      // pieza es manual no publica nada y lo explica en `motivo`.
-      const celdas = (data.resultado && data.resultado.celdas) || [];
-      const manuales = celdas.filter((c) => c.estado_celda === 'manual_pendiente').length;
-      state.pd2BulkResultados.push({ ok: true, codigo: data.codigo, publicado: !!data.publicado, manuales, motivo: data.motivo || '' });
+      if (data.enCola) {
+        state.pd2BulkResultados.push({ ok: true, codigo: data.codigo, enCola: true, correlationId: data.correlationId });
+      } else {
+        // Sin migración 016 el server lo termina en el mismo request, como antes.
+        const celdas = (data.resultado && data.resultado.celdas) || [];
+        const manuales = celdas.filter((c) => c.estado_celda === 'manual_pendiente').length;
+        state.pd2BulkResultados.push({ ok: true, codigo: data.codigo, publicado: !!data.publicado, manuales, motivo: data.motivo || '' });
+      }
     } catch (err) {
       state.pd2BulkResultados.push({ ok: false, error: err.message });
     }
@@ -5703,6 +5803,7 @@ async function enviarBulkV2() {
 
   state.pd2BulkEnviando = false;
   state.pd2BulkPreviews = null;
+  if (state.pd2BulkResultados.some((r) => r.enCola)) { state.bandeja.abierta = true; cargarBandeja(); }
 
   // Salga bien o mal, se deja la pantalla del pedido y el resultado se
   // muestra arriba, claro (usuario, 2026-09-14). Si todo salió: formulario
@@ -6020,6 +6121,7 @@ async function entrarAlApp() {
   cambiarTab(state.tabActiva);
   arrancarLatido();
   if (!historialRefrescoTimer) programarRefrescoHistorial();
+  cargarBandeja();
 }
 
 // Presencia en vivo (Panel Usuarios → Uso, "En vivo"): un latido por minuto
@@ -6602,6 +6704,8 @@ document.addEventListener('click', (e) => {
   if (action === 'pd2-resultado-final-cerrar') { state.pd2BulkResultados = null; renderResultadoFinalV2(); return; }
   if (action === 'pd2-resultado-corregir') { state.pd2BulkResultados = null; state.pd2ModoCarga = 'anuncios'; renderResultadoFinalV2(); renderTabPedido2(); return; }
   if (action === 'ir-a-validacion') { cambiarTab('pendientes'); return; }
+  if (action === 'bandeja-toggle') { state.bandeja.abierta = !state.bandeja.abierta; renderBandeja(); return; }
+  if (action === 'bandeja-cerrar') { e.stopPropagation(); cerrarBandeja(); return; }
   // Mismo botón, dos pasos: sin preview verifica; con preview crea.
   if (action === 'pd2-confirmar-modulo') { confirmarModuloV2(Number(id)); return; }
   if (action === 'pd2-modo-carga') { cambiarModoCargaV2(id); return; }

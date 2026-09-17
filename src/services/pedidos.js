@@ -42,6 +42,7 @@ const { resolverPresupuestoPorTipo } = require('./escalaPresupuestos');
 const { getAudienciasPorActivo } = require('./audiencias');
 const { OBJETIVOS_PERMITIDOS, esTipoPermitidoAutomatizado } = require('../config/mvp');
 const { replicarATareas } = require('./tareasSheet');
+const { encolar } = require('./colaEnvio');
 const { registrarCodigo, recordarCodigo } = require('./codigosSheet');
 const { etiquetarCreatividad } = require('./storage');
 const { buscarUltimoMismoCruce } = require('./repartoSugerido');
@@ -72,7 +73,9 @@ const { buscarUltimoMismoCruce } = require('./repartoSugerido');
 // (INGESTA_ESTADO_INICIAL) y saltea la fila en CodigosContenido — hasta el
 // 2026-09-14 se leía de datos.origen y cualquier pedido por API podía
 // mandarlo.
-async function crearPedido(datos, usuario, { publicar = false, soloValidar = false, modo, origen = '' } = {}) {
+// enCola=true → no espera a Meta: guarda la fila con envio='en_cola', la
+// encola (services/colaEnvio.js) y devuelve enseguida. Lo demás, igual.
+async function crearPedido(datos, usuario, { publicar = false, soloValidar = false, modo, origen = '', enCola = false } = {}) {
   const modoResuelto = modo === 'automatizado' ? 'automatizado' : 'normal';
   const origenResuelto = origen === 'ingesta' ? 'ingesta' : '';
   const {
@@ -499,19 +502,31 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     // Material por plataforma (migración 015): JSON {Meta: ..., Youtube: ...}.
     // Solo cuando aporta algo (varias plataformas o alguna que no es Meta).
     ...(Object.keys(materialesPorPlataforma).length && (nombresPlataforma.length > 1 || !incluyeMeta) ? { materiales: JSON.stringify(materialesPorPlataforma) } : {}),
+    // En cola (migración 016): Red/Placement se guardan ya acá para que, si
+    // el servidor se reinicia antes de terminarla, se pueda retomar desde
+    // la fila (ver terminarPedidoDesdeFila).
+    ...(enCola ? {
+      envio: 'en_cola',
+      envio_actualizado: new Date().toISOString(),
+      redes: esMeta ? (Array.isArray(datos.redes) ? datos.redes.join(',') : String(datos.redes || '')) : '',
+      placements: esMeta ? placementsElegidos.join(',') : '',
+    } : {}),
   };
   try {
     await insertarFilaColaPautas(filaNueva);
   } catch (e) {
-    // Migración 009 (categoria_pieza/gobernador) o 015 (materiales) sin
-    // correr: se guarda el pedido igual, sin esos campos, y se avisa — un
-    // pedido no se pierde por una columna que todavía no existe (lección
-    // de la 004).
-    if (!/categoria_pieza|gobernador|materiales/.test(e.message)) throw e;
-    console.warn('[pedidos] falta correr una migración (009 categoria_pieza/gobernador o 015 materiales) — guardo sin esas columnas:', e.message);
+    // Migración 009 (categoria_pieza/gobernador), 015 (materiales) o 016
+    // (envio) sin correr: se guarda el pedido igual, sin esos campos, y se
+    // avisa — un pedido no se pierde por una columna que todavía no existe
+    // (lección de la 004). Sin la 016 no hay cola: se termina en el request.
+    if (!/categoria_pieza|gobernador|materiales|envio/.test(e.message)) throw e;
+    console.warn('[pedidos] falta correr una migración (009 categoria_pieza/gobernador, 015 materiales o 016 envio) — guardo sin esas columnas:', e.message);
     delete filaNueva.categoria_pieza;
     delete filaNueva.gobernador;
     delete filaNueva.materiales;
+    delete filaNueva.envio;
+    delete filaNueva.envio_actualizado;
+    if (/envio/.test(e.message)) enCola = false; // eslint-disable-line no-param-reassign
     await insertarFilaColaPautas(filaNueva);
   }
 
@@ -537,28 +552,52 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
       .catch((e) => console.warn('[creatividades] etiquetar', m, e.message));
   });
 
-  // 2) ...y de una la "termina" (mismo paso que antes hacía Crear Anuncios):
-  // completa lo que le falta a Meta (billing_event, etc.) — para Público ya
-  // tenemos el post real, para Oculto ya tenemos material/copy/formato.
+  // 2) ...y la "termina": completa lo que le falta a Meta y publica (ver
+  // terminarPedido). En cola: eso corre de fondo y acá se devuelve ya.
+  const paramsTerminar = {
+    correlationId, codigo, plataforma, modoResuelto, visibilidad,
+    post: postFinal, objetivoTexto, audienciaCodigo, refuerzoTexto, presupuesto,
+    fechaInicio: fechaInicio || hoy, fechaFin,
+    formatoFinal, materialFinal, materialStories, copyFinal, copyOpcional, linkDestino,
+    redes: esMeta ? datos.redes : [], placements: esMeta ? datos.placements : [],
+    reparto: datos.reparto && typeof datos.reparto === 'object' ? datos.reparto : null,
+    confirmadoPor: usuario.nombre,
+  };
+  if (enCola) {
+    encolar(correlationId, activoKey, () => terminarPedido(paramsTerminar));
+    return { correlationId, codigo, enCola: true, plataforma };
+  }
+  return terminarPedido(paramsTerminar);
+}
+
+// Segunda mitad de crearPedido: deja la fila "preview_lista" (procesarPedido*)
+// y publica en Meta (confirmarPauta). Antes vivía adentro de crearPedido y
+// corría en el mismo request; ahora también la corre la cola de envío.
+async function terminarPedido(p) {
+  const {
+    correlationId, codigo, plataforma, modoResuelto, visibilidad, post,
+    objetivoTexto, audienciaCodigo, refuerzoTexto, presupuesto, fechaInicio, fechaFin,
+    formatoFinal, materialFinal, materialStories, copyFinal, copyOpcional, linkDestino, redes, placements,
+    reparto, confirmadoPor,
+  } = p;
   const comun = {
     correlationId,
     objetivo: objetivoTexto,
     audiencia: audienciaCodigo,
     refuerzoAudiencia: refuerzoTexto,
     presupuesto,
-    fechaInicio: fechaInicio || hoy,
+    fechaInicio,
     fechaFin,
   };
   if (visibilidad === 'PUBLICO') {
-    await procesarPedidoExistente({ ...comun, post: postFinal });
+    await procesarPedidoExistente({ ...comun, post });
   } else {
-    await procesarPedidoDark({ ...comun, formato: formatoFinal, material: materialFinal, materialStories, copy: copyFinal, copyOpcional, linkDestino, redes: esMeta ? datos.redes : [], placements: esMeta ? datos.placements : [] });
+    await procesarPedidoDark({ ...comun, formato: formatoFinal, material: materialFinal, materialStories, copy: copyFinal, copyOpcional, linkDestino, redes, placements });
   }
 
   // 3) A partir de acá el camino es el mismo para los dos roles: se arma la
-  //    matriz y se publica en Meta (siempre PAUSED) en el mismo request —
-  //    ya no hay instancia intermedia de Validación para "Pedido de
-  //    Pauta" (MVP: ver plan "MVP: sacar Validación").
+  //    matriz y se publica en Meta (siempre PAUSED) — ya no hay instancia
+  //    intermedia de Validación (MVP: ver plan "MVP: sacar Validación").
   const pauta = await getPautaPorId(correlationId);
   const matriz = await getMatrizParaPauta(pauta);
 
@@ -584,7 +623,6 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // parejo por defecto que ya calculó la matriz. Las celdas salen siempre
   // de la matriz: del reparto solo se toma el porcentaje, así no se puede
   // inventar una combinación que la pieza no tiene.
-  const reparto = datos.reparto && typeof datos.reparto === 'object' ? datos.reparto : null;
   const celdas = matriz.celdas.map((c) => ({
     objetivo: c.objetivo,
     audiencia_codigo: c.audiencia.codigo,
@@ -601,7 +639,7 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   }
   let resultado;
   try {
-    resultado = await confirmarPauta(correlationId, celdas, usuario.nombre);
+    resultado = await confirmarPauta(correlationId, celdas, confirmadoPor);
   } catch (err) {
     // Si Meta (o cualquier paso de la publicación) falla, el error tiene que
     // quedar en la fila — antes la pieza quedaba "preview_lista" sin rastro
@@ -618,6 +656,34 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // usabilidad 2026-09-12).
   const publicado = matriz.celdas.some((c) => !c.manual);
   return { correlationId, codigo, publicado, manual: !publicado, plataforma, resultado };
+}
+
+// Retoma un pedido que quedó en cola cuando el servidor se reinició: arma
+// los parámetros de terminarPedido desde la fila (lo que crearPedido ya
+// había guardado). Solo lo llama colaEnvio.recuperarPendientes.
+async function terminarPedidoDesdeFila(correlationId) {
+  const f = await getPautaPorId(correlationId);
+  if (!f) throw new Error(`No existe el pedido "${correlationId}".`);
+  if (f.estado !== ESTADO_PEDIDO_PENDIENTE) return { correlationId, codigo: f.codigo, publicado: false, motivo: `ya estaba en estado "${f.estado}"` };
+  const esMeta = String(f.plataforma || 'Meta') === 'Meta';
+  const placements = String(f.placements || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const postId = String(f.post_id || '');
+  let reparto = null;
+  try { reparto = f.reparto ? JSON.parse(f.reparto) : null; } catch (e) { reparto = null; }
+  return terminarPedido({
+    correlationId, codigo: f.codigo, plataforma: f.plataforma || 'Meta', modoResuelto: f.modo === 'automatizado' ? 'automatizado' : 'normal',
+    visibilidad: f.visibilidad,
+    post: f.visibilidad === 'PUBLICO'
+      ? { id: postId, permalink: f.material || '', caption: f.copy || '', plataforma: (postId ? !postId.includes('_') : /instagram\.com/i.test(f.material || '')) ? 'Instagram' : 'Facebook' }
+      : null,
+    objetivoTexto: f.objetivo, audienciaCodigo: f.audiencia, refuerzoTexto: f.refuerzo_audiencia || '',
+    presupuesto: Number(f.presupuesto) || 0, fechaInicio: f.fecha_inicio || f.fecha, fechaFin: f.fecha_fin || '',
+    formatoFinal: f.formato, materialFinal: f.material, materialStories: f.material_stories || '', copyFinal: f.copy || '',
+    copyOpcional: esMeta && placements.length === 1 && placements[0] === 'stories', linkDestino: f.link_destino || '',
+    redes: esMeta ? String(f.redes || '').split(',').map((s) => s.trim()).filter(Boolean) : [],
+    placements: esMeta ? placements : [],
+    reparto, confirmadoPor: f.creador,
+  });
 }
 
 // Edita los campos de una pauta que YA EXISTE (a diferencia de crearPedido,
@@ -743,4 +809,4 @@ async function editarPauta(correlationId, datos) {
   return { correlationId, estado: cambios.estado || pauta.estado };
 }
 
-module.exports = { crearPedido, editarPauta };
+module.exports = { crearPedido, editarPauta, terminarPedidoDesdeFila };

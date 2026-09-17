@@ -43,11 +43,43 @@ const upload = multer({
 // en app.js): mismo presupuesto automático por escala que PM/Cuentas.
 router.post('/pedidos', requireRol('pm_cuentas', 'implementador', 'administrador'), async (req, res) => {
   try {
-    const resultado = await crearPedido(req.body, req.usuario, { modo: req.modoActivo });
+    // enCola (2026-09-17): valida y guarda, y devuelve sin esperar a Meta —
+    // el envío sigue de fondo (services/colaEnvio.js) y se sigue por
+    // GET /api/pedidos/envios.
+    const resultado = await crearPedido(req.body, req.usuario, { modo: req.modoActivo, enCola: req.body.enCola === true });
     res.json(resultado);
   } catch (err) {
     console.error('[crear-pedido]', err.message);
     res.status(err.status || 500).json({ error: 'No se pudo crear el pedido', detalle: err.message });
+  }
+});
+
+// GET /api/pedidos/envios — lo que este usuario mandó a la cola: en cola /
+// creando / listo / error. Trae lo que sigue en proceso y lo terminado en
+// la última hora (así el cuadro sobrevive a recargar la página).
+router.get('/pedidos/envios', requireRol('pm_cuentas', 'implementador', 'administrador'), async (req, res) => {
+  try {
+    const { readTable } = require('../services/dataSource');
+    const [pautas, matriz] = await Promise.all([readTable('cola_pautas'), readTable('matriz_distribucion')]);
+    const hace1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const mios = new Set([req.usuario.email, req.usuario.nombre].filter(Boolean));
+    const publicadas = new Set(matriz.filter((c) => c.adset_id || c.ad_id).map((c) => c.correlation_id));
+    const manuales = new Set(matriz.filter((c) => c.estado_celda === 'manual_pendiente').map((c) => c.correlation_id));
+    const salida = pautas
+      .filter((p) => p.envio && mios.has(p.creador) && (p.envio === 'en_cola' || p.envio === 'creando' || (p.envio_actualizado || '') >= hace1h))
+      .map((p) => ({
+        correlation_id: p.correlation_id, codigo: p.codigo, contenido: p.contenido, campana: p.campana,
+        proyecto: p.proyecto, activo: p.activo, plataforma: p.plataforma, modo: p.modo,
+        envio: p.envio, envio_error: p.envio_error || '', envio_actualizado: p.envio_actualizado || '',
+        creado: p.correlation_id.replace('PEDIDO-', ''),
+        publicado: publicadas.has(p.correlation_id),
+        manual: manuales.has(p.correlation_id) || (p.envio === 'listo' && !publicadas.has(p.correlation_id)),
+      }))
+      .sort((a, b) => (a.creado < b.creado ? -1 : 1));
+    res.json(salida);
+  } catch (err) {
+    console.error('[pedidos/envios]', err.message);
+    res.status(500).json({ error: 'No se pudo leer la cola de envío', detalle: err.message });
   }
 });
 
