@@ -86,7 +86,11 @@ function armarFila(pauta, plataforma, activo, tipo) {
     Formato: pauta.formato || '',
     Ministerio: '',
     Plataforma: plataforma,
-    Visibilidad: pauta.visibilidad === 'PUBLICO' ? 'Público' : 'Oculto / Dark',
+    // EXACTAMENTE como lo escribe AppSheet hoy ("Publico" sin acento /
+    // "Oculto"): Make decide con este texto. Con "Público" (con acento) las
+    // filas de PAUTADOR no generaban tarea en Asana (visto 2026-09-17: todas
+    // las Público sin link, todas las Oculto con link).
+    Visibilidad: pauta.visibilidad === 'PUBLICO' ? 'Publico' : 'Oculto',
     Comentarios: pauta.comentarios || '',
     Creador: pauta.creador || '',
     Modificacion: '',
