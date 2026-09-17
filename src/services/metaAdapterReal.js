@@ -198,7 +198,12 @@ async function crearCreative(pauta, ctx, postIdOverride) {
 
   let creativePayload;
   const postId = postIdOverride || pauta.post_id;
-  if (pauta.formato === 'Post existente' && postId) {
+  // Público con publicación real = por visibilidad + post_id, NO por
+  // formato: desde el 2026-09-16 Público también lleva el Formato real
+  // (Placa Fija, Video…) para el nombre del contenido, así que "Post
+  // existente" ya no identifica este caso. (Bug 2026-09-17: con Placa Fija
+  // caía en el camino de subir archivo e intentaba bajar el link del post.)
+  if (postId && (pauta.visibilidad === 'PUBLICO' || pauta.formato === 'Post existente')) {
     // Publicación existente: el anuncio referencia el post tal cual está
     // (mismo texto, misma imagen) — nada que subir. object_story_id va
     // COMO CAMPO DE NIVEL SUPERIOR, no anidado en object_story_spec (Meta
