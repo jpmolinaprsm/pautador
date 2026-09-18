@@ -4119,6 +4119,9 @@ function reiniciarMaterialesPiezasV2() {
     item.materiales = {};
     item.materialLink = '';
   });
+  // Las tarjetas viejas se vacían antes de redibujar: si no, el volcado del
+  // DOM de renderBulkItemsV2 volvería a traer los links que se acaban de limpiar.
+  document.getElementById('pd2-bulk-items').innerHTML = '';
   state.pd2BulkPreviews = null;
   state.pd2BulkResultados = null;
   renderBulkItemsV2();
@@ -4636,6 +4639,31 @@ function renderMaterialStoriesWrapV2(i) {
   if (el) el.innerHTML = renderMaterialStoriesBlockV2(i);
 }
 
+// Medidas del "Material para Stories" de un contenido, si cargó alguno
+// (archivo subido o link). null = no cargó nada (Stories usa el principal).
+async function medirMaterialStoriesV2(i) {
+  const item = state.pd2BulkItems[i];
+  if (!item) return null;
+  if (item.materialStoriesModo === 'archivo') {
+    const a = item.materialStoriesArchivo;
+    if (!a) return null;
+    const m = a.width && a.height ? { width: a.width, height: a.height } : await medirMedia(a.previewUrl, false);
+    return { medidas: [m].filter(Boolean) };
+  }
+  const input = document.getElementById(`pd2bulk${i}-material-stories`);
+  const link = input ? input.value.trim() : '';
+  if (!link) return null;
+  try {
+    const r = await apiFetch('/api/material/verificar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ material: link }) });
+    const data = await r.json();
+    if (!r.ok) return { medidas: [] };
+    const m = data.width && data.height ? { width: data.width, height: data.height } : await medirMedia(data.previewUrl, false);
+    return { medidas: [m].filter(Boolean) };
+  } catch (e) {
+    return { medidas: [] };
+  }
+}
+
 async function subirArchivoMaterialStoriesV2(i, file) {
   const item = state.pd2BulkItems[i];
   if (!item) return;
@@ -4656,6 +4684,7 @@ async function subirArchivoMaterialStoriesV2(i, file) {
   }
   item.materialStoriesSubiendo = false;
   renderMaterialStoriesWrapV2(i);
+  invalidarPreviewsPiezasV2(); // cambió el material: lo verificado ya no vale
 }
 
 function renderSelectorPostsBulkV2(i) {
@@ -5017,16 +5046,22 @@ function renderAvisoPresupuestoV2() {
 function actualizarBotonBulkV2(algunaFallaPresupuesto) {
   const btn = document.getElementById('pd2-bulk-crear');
   if (!btn || state.pd2BulkEnviando || state.pd2BulkVerificando) return;
-  const listo = !!(state.pd2BulkPreviews && state.pd2BulkPreviews.length && state.pd2BulkPreviews.every((p) => p.ok));
+  const listo = previewListoV2();
   btn.textContent = listo ? (state.pd2BulkItems.length > 1 ? 'Confirmar pedidos' : 'Confirmar pedido') : 'Ver preview';
-  // Con un bloqueo de specs vigente el botón queda apagado: no tiene sentido
-  // dejar que lo intente si Meta lo va a rechazar (enviarBulkV2 lo vuelve a
-  // chequear por las dudas). "Vigente" = del preview actual, no de uno viejo
-  // — en cuanto se edita algo, pd2BulkPreviews se anula (ver
-  // invalidarPreviewsPiezasV2 y el listener de pd2bulk*-material) y este
-  // chequeo deja de aplicar solo.
-  const conBloqueoVigente = !!(state.pd2BulkPreviews && state.pd2BulkPreviews.some((p) => p.ok && p.bloqueos && p.bloqueos.length));
-  btn.disabled = !!algunaFallaPresupuesto || conBloqueoVigente;
+  // Un preview con errores o con bloqueos de specs NO apaga el botón
+  // (usuario, 2026-09-18: "al corregir no me deja poner ver preview de
+  // vuelta"): queda en "Ver preview", que vuelve a verificar todo. Antes se
+  // apagaba y dependía de que CADA forma de corregir (subir el material de
+  // Stories, quitar un archivo…) se acordara de invalidar el preview.
+  btn.disabled = !!algunaFallaPresupuesto;
+}
+
+// Preview listo para confirmar = todas las piezas verificadas, sin errores
+// y sin bloqueos de specs. Solo en ese caso se bloquea el formulario y el
+// botón pasa a "Confirmar".
+function previewListoV2() {
+  const p = state.pd2BulkPreviews;
+  return !!(p && p.length && p.every((x) => x.ok && !(x.bloqueos && x.bloqueos.length)));
 }
 
 // Línea/Copy/Audiencia de cada pieza viven en el DOM mientras se editan —
@@ -5064,6 +5099,10 @@ function sincronizarBulkAudienciasDesdeDOMV2() {
 }
 
 function renderBulkItemsV2() {
+  // Siempre se vuelca primero lo tipeado (Línea/Copy/links): redibujar las
+  // tarjetas sin esto borra lo que todavía vive solo en el DOM. Antes cada
+  // llamador tenía que acordarse de hacerlo.
+  sincronizarBulkAudienciasDesdeDOMV2();
   document.getElementById('pd2-bulk-items').innerHTML = state.pd2BulkItems.map((item, i) => renderItemBulkV2(i)).join('');
   // Cualquier redibujado de las tarjetas puede venir de corregir algo que
   // tenía el botón apagado (ver actualizarBotonBulkV2) — se recalcula acá,
@@ -5212,7 +5251,22 @@ async function verificarMaterialesBulkV2(ctxParam) {
   const btn = document.getElementById('pd2-bulk-crear');
   btn.disabled = true;
   btn.textContent = 'Verificando materiales…';
+  try {
+    state.pd2BulkPreviews = await armarPreviewsBulkV2(ctx);
+  } catch (err) {
+    // Cualquier falla inesperada al verificar: el botón no puede quedar
+    // clavado en "Verificando…" — se avisa y se puede volver a intentar.
+    state.pd2BulkPreviews = null;
+    state.pd2BulkError = 'No se pudo verificar: ' + err.message + ' — probá de nuevo.';
+    renderBulkErrorV2();
+  }
+  state.pd2BulkVerificando = false;
+  // El disabled/texto del botón se recalculan acá adentro (ver
+  // actualizarBotonBulkV2) según lo que acaba de quedar en pd2BulkPreviews.
+  renderResultadoBulkV2();
+}
 
+async function armarPreviewsBulkV2(ctx) {
   const previews = [];
   const platsPreview = plataformasPd2();
   const incluyeMetaPreview = platsPreview.includes('Meta');
@@ -5343,8 +5397,15 @@ async function verificarMaterialesBulkV2(ctxParam) {
         medidas = [await medirMedia(p.previewUrl, p.tipo === 'video')];
       }
       p.medidas = medidas.filter(Boolean);
+      // Con "Material para Stories" cargado, Stories usa ESE material: el
+      // principal se evalúa solo contra el resto de los placements y el de
+      // Stories contra Stories. Antes el principal 1:1 quedaba bloqueado por
+      // "Stories pide 9:16" aunque la 9:16 estuviera cargada aparte, y no
+      // había forma de destrabarlo (usuario, 2026-09-18).
+      // eslint-disable-next-line no-await-in-loop
+      const stories = mostrarMaterialStoriesV2() ? await medirMaterialStoriesV2(p.i) : null;
       const specs = evaluarSpecsPieza({
-        placements: placementsElegidos,
+        placements: stories ? placementsElegidos.filter((x) => x !== 'stories') : placementsElegidos,
         modo: formatoSpecs ? formatoSpecs.modo : (p.carruselCantidad ? 'carrusel' : p.tipo),
         esVideo: p.tipo === 'video',
         conLink: !!ctx.linkDestino,
@@ -5352,6 +5413,13 @@ async function verificarMaterialesBulkV2(ctxParam) {
       });
       p.bloqueos = specs.bloqueos;
       p.avisos = specs.avisos;
+      if (stories) {
+        const specsStories = evaluarSpecsPieza({ placements: ['stories'], modo: 'imagen', esVideo: false, conLink: false, medidas: stories.medidas });
+        p.bloqueos = p.bloqueos.concat(specsStories.bloqueos.map((b) => 'Material de Stories: ' + b));
+        p.avisos = p.avisos.concat(specsStories.avisos.map((a) => 'Material de Stories: ' + a));
+      } else if (mostrarMaterialStoriesV2() && p.bloqueos.some((b) => /^Stories pide/.test(b))) {
+        p.avisos = p.avisos.concat(['Para usar esta pieza en Feed y otra en Stories, cargá la vertical (9:16) en "Material para Stories" de este contenido.']);
+      }
     }
   }
 
@@ -5381,11 +5449,7 @@ async function verificarMaterialesBulkV2(ctxParam) {
     // eso — el servidor igual va a rechazar al confirmar.
   }
 
-  state.pd2BulkPreviews = previews;
-  state.pd2BulkVerificando = false;
-  // El disabled/texto del botón se recalculan acá adentro (ver
-  // actualizarBotonBulkV2) según lo que acaba de quedar en pd2BulkPreviews.
-  renderResultadoBulkV2();
+  return previews;
 }
 
 // "AB" a partir de "Activo de Prueba" — el avatar del mock de abajo
@@ -5648,6 +5712,8 @@ function resetPedidoAnunciosV2() {
   });
   const gob = document.getElementById('pd2-gobernador');
   if (gob) gob.selectedIndex = 0;
+  const btnCrear = document.getElementById('pd2-bulk-crear');
+  if (btnCrear) { btnCrear.textContent = 'Ver preview'; btnCrear.disabled = false; }
   ['pd2-modulo-1-error', 'pd2-modulo-2-error', 'pd2-modulo-3-error', 'pd2-modulo-4-error', 'pd2-bulk-error'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.hidden = true;
@@ -5697,7 +5763,7 @@ function renderResultadoBulkV2() {
   }
   document.getElementById('pd2-bulk-resultado').innerHTML = renderPreviewsBulkV2() + filas + nota;
 
-  const listo = !!(state.pd2BulkPreviews && state.pd2BulkPreviews.length && state.pd2BulkPreviews.every((p) => p.ok));
+  const listo = previewListoV2();
   recalcularPiezasV2();
   bloquearFormularioV2(listo);
 }
@@ -5727,14 +5793,6 @@ async function enviarBulkV2() {
   if (!ctx.campana) { state.pd2BulkError = 'Escribí la Campaña / Comunicación (módulo 1) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
   if (!ctx.audienciaCodigo) { state.pd2BulkError = 'Elegí la Audiencia principal (módulo 2) antes de crear los pedidos.'; renderBulkErrorV2(); return; }
   if (!state.pd2BulkItems.length) { state.pd2BulkError = 'Elegí la Cantidad de piezas (módulo 4) antes de continuar.'; renderBulkErrorV2(); return; }
-  // Specs de Placement: si el preview marcó un bloqueo (medida que Meta
-  // rechaza), no se manda nada — ver evaluarSpecsPieza.
-  const conBloqueo = (state.pd2BulkPreviews || []).filter((p) => p.ok && p.bloqueos && p.bloqueos.length);
-  if (conBloqueo.length) {
-    state.pd2BulkError = conBloqueo.length + ' pieza(s) con una medida que Meta rechaza para el Placement elegido (ver el preview). Corregí el material o el Placement antes de crear.';
-    renderBulkErrorV2();
-    return;
-  }
 
   // Mismo chequeo que en v1, pieza por pieza: si alguna no llega al mínimo
   // de Meta o tiene un reparto que no suma 100%, no se manda nada (mejor
@@ -5762,7 +5820,10 @@ async function enviarBulkV2() {
     }
   }
 
-  if (!state.pd2BulkPreviews || state.pd2BulkPreviews.some((p) => !p.ok)) {
+  // Sin preview, con errores o con bloqueos de specs (medida que Meta
+  // rechaza): el botón es "Ver preview" y vuelve a verificar todo. Solo se
+  // crea con un preview limpio (ver previewListoV2).
+  if (!previewListoV2()) {
     await verificarMaterialesBulkV2(ctx);
     return;
   }
@@ -6760,6 +6821,7 @@ document.addEventListener('click', (e) => {
     const idx = Number(el.dataset.index);
     state.pd2BulkItems[idx].materialStoriesModo = id;
     renderMaterialStoriesWrapV2(idx);
+    invalidarPreviewsPiezasV2();
     return;
   }
   if (action === 'pd2bulk-archivo-stories-quitar') {
@@ -6767,6 +6829,7 @@ document.addEventListener('click', (e) => {
     state.pd2BulkItems[idx].materialStoriesArchivo = null;
     state.pd2BulkItems[idx].materialStoriesError = null;
     renderMaterialStoriesWrapV2(idx);
+    invalidarPreviewsPiezasV2();
     return;
   }
   if (action === 'pd2bulk-carrusel-agregar') {
@@ -7238,7 +7301,7 @@ document.addEventListener('input', (e) => {
   }
   // Si se toca el material, lo verificado deja de valer: hay que volver a
   // verificar antes de poder crear.
-  if (e.target.id && /^pd2bulk\d+-material$/.test(e.target.id) && state.pd2BulkPreviews) {
+  if (e.target.id && /^pd2bulk\d+-material(-stories|-[a-z]+)?$/.test(e.target.id) && state.pd2BulkPreviews) {
     state.pd2BulkPreviews = null;
     renderResultadoBulkV2();
   }

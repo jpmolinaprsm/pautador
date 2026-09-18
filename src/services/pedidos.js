@@ -275,6 +275,19 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     throw err;
   }
 
+  // Fechas (usuario, 2026-09-18): un fin anterior al inicio, o ya pasado,
+  // pasaba el preview y recién lo rechazaba Meta al publicar. La ingesta no
+  // entra: arma sus fechas sola.
+  if (origenResuelto !== 'ingesta') {
+    const hoyAr = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const ini = String(fechaInicio || '').slice(0, 10);
+    const finF = String(fechaFin || '').slice(0, 10);
+    let errorFechas = '';
+    if (finF && ini && finF < ini) errorFechas = `La Fecha de fin (${finF}) es anterior a la Fecha de inicio (${ini}).`;
+    else if (finF && finF < hoyAr) errorFechas = `La Fecha de fin (${finF}) ya pasó.`;
+    if (errorFechas) { const err = new Error(errorFechas); err.status = 400; throw err; }
+  }
+
   // El material se verifica ACÁ, no al publicar: un link de Drive mal pegado
   // (privado, carpeta, PDF, borrado) antes se descubría recién cuando el
   // implementador confirmaba, lejos de quien lo cargó. Solo aplica a Oculto:
@@ -310,6 +323,17 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
         const info = await verificarMaterial(m);
         if (infoPlat.soloVideo && info.tipo !== 'video') throw new Error(`${n} solo acepta video, y esto es ${info.tipo}`);
         if (n === 'Display' && info.tipo !== 'imagen') throw new Error(`Display solo acepta imágenes (o un link a carpeta), y esto es ${info.tipo}`);
+        // El material tiene que ser del tipo que pide el Formato (usuario,
+        // 2026-09-18: paquetes con videos e imágenes mezclados). Antes esto
+        // recién saltaba al publicar en Meta — con la cola de envío, como un
+        // error en rojo después de confirmar. Ahora lo frena el preview.
+        const modoPedido = esCarruselPedido ? 'imagen' : (esMeta ? (formatoInfo && formatoInfo.modo) : modoDelFormato(plataformaInfo, formato));
+        // Pedido Manual: una Placa Animada puede venir como GIF (para Meta es
+        // "imagen") — ahí no publica PAUTADOR, así que se deja pasar.
+        const gifEnManual = modoResuelto === 'normal' && /gif/i.test(String(info.contentType || ''));
+        if (n !== 'Display' && !gifEnManual && (modoPedido === 'imagen' || modoPedido === 'video') && info.tipo !== modoPedido) {
+          throw new Error(`el Formato "${formato}" pide ${modoPedido === 'video' ? 'un video' : 'una imagen'}, y este material es ${info.tipo === 'video' ? 'un video' : 'una imagen'} — cambiá el material o cargalo en otro pedido con el Formato que corresponde`);
+        }
       } catch (e) {
         const prefijo = lista.length > 1 ? `${n === 'Display' ? 'imagen' : 'imagen'} ${i + 1}: ` : '';
         const err = new Error(`No se puede usar ese material (${prefijoPlat}${prefijo}${e.message})`);
@@ -398,6 +422,17 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
 
     if (activoSolicitado.activo_habilitado !== true) {
       const err = new Error(`El activo "${activoSolicitado.activo || activoKey}" no está habilitado para Pedido Anuncios Automatizados.`);
+      err.status = 400;
+      throw err;
+    }
+
+    // Una imagen para Feed y otra para Stories en el mismo anuncio (Meta:
+    // "asset customization") solo anda si el activo tiene Instagram
+    // conectado: sin eso Meta rechaza el anuncio con "Selecciona una cuenta
+    // de Instagram…" (visto 2026-09-18 con Gaceta Santafesina, que es solo
+    // Facebook). Se frena acá, en el preview, en vez de fallar al publicar.
+    if (visibilidad === 'DARK' && materialStories && !/^\d{5,}$/.test(String(activoSolicitado.ig_actor_id || '').trim())) {
+      const err = new Error(`"${activoSolicitado.activo || activoKey}" no tiene Instagram conectado, y sin eso Meta no acepta una imagen distinta para Stories en el mismo anuncio. Usá una sola pieza vertical (9:16) para Feed y Stories, o hacé dos pedidos: uno de Feed y otro de Stories.`);
       err.status = 400;
       throw err;
     }
