@@ -9,6 +9,7 @@
 // Si el servidor se reinicia con cosas en cola, al arrancar se retoman
 // desde la fila (terminarPedidoDesdeFila en pedidos.js).
 
+const env = require('../config/env');
 const { readTable, updateRow } = require('./dataSource');
 
 const colas = new Map(); // activoKey -> promesa del último trabajo
@@ -53,7 +54,12 @@ async function recuperarPendientes(terminarDesdeFila) {
     console.warn('[cola-envio] no pude leer la cola al arrancar:', e.message);
     return 0;
   }
-  const pendientes = filas.filter((f) => f.envio === 'en_cola' || f.envio === 'creando');
+  // Solo lo de ESTE proceso (envio_instancia, migración 017): producción
+  // publica ACTIVO y una PC local PAUSADO sobre la misma base — ninguno puede
+  // retomar lo del otro. Lo que no tiene dueño anotado es de antes de la 017
+  // y lo creó producción: solo lo retoma Railway.
+  const mio = (f) => (f.envio_instancia ? f.envio_instancia === env.instancia : env.enRailway);
+  const pendientes = filas.filter((f) => (f.envio === 'en_cola' || f.envio === 'creando') && mio(f));
   pendientes.forEach((f) => encolar(f.correlation_id, f.activo, () => terminarDesdeFila(f.correlation_id)));
   if (pendientes.length) console.log(`[cola-envio] retomo ${pendientes.length} pedido(s) que quedaron en cola`);
   return pendientes.length;

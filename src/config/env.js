@@ -4,6 +4,19 @@
 // desde dónde se arrancó node.
 require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.env') });
 
+// Regla del lanzamiento (usuario, 2026-09-18): "todo lo que sale del link
+// sale Activo y lo que sale local, sale pausado".
+//  - En Railway (el link): ACTIVE por defecto. Para frenar el gasto sin
+//    tocar código, poner la variable en PAUSED en Railway.
+//  - En cualquier otro lado (una PC, pruebas): SIEMPRE PAUSED, diga lo que
+//    diga el .env — una prueba local nunca puede gastar plata.
+// Railway define solo estas variables en sus contenedores.
+const EN_RAILWAY = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+function estadoInicialMeta(variable) {
+  if (!EN_RAILWAY) return 'PAUSED';
+  return String(process.env[variable] || 'ACTIVE').toUpperCase() === 'PAUSED' ? 'PAUSED' : 'ACTIVE';
+}
+
 const env = {
   port: process.env.PORT || 3000,
   dataSource: process.env.DATA_SOURCE || 'mock', // 'mock' (Excel local), 'google' (Sheets real) o 'supabase' (Postgres real)
@@ -75,11 +88,15 @@ const env = {
   // Estado con el que la ingesta crea campaña/adset/ad en Meta. PAUSED por
   // defecto; ACTIVE = gasto real inmediato — se cambia solo a pedido del
   // usuario. Ningún otro origen (pedido/csv) lo usa.
-  ingestaEstadoInicial: (process.env.INGESTA_ESTADO_INICIAL || 'PAUSED').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
+  ingestaEstadoInicial: estadoInicialMeta('INGESTA_ESTADO_INICIAL'),
   // Estado inicial en Meta de los pedidos AUTOMATIZADOS hechos desde la
-  // pantalla (lanzamiento 2026-09-16: ACTIVE). PAUSED por default: activar
-  // gasto real es una decisión de configuración, nunca de un botón.
-  automatizadoEstadoInicial: (process.env.AUTOMATIZADO_ESTADO_INICIAL || 'PAUSED').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
+  // pantalla. Ver estadoInicialMeta().
+  automatizadoEstadoInicial: estadoInicialMeta('AUTOMATIZADO_ESTADO_INICIAL'),
+  // Dónde corre este proceso: 'railway' (el link de producción) o
+  // 'local:<equipo>'. La cola de envío lo usa para que cada proceso retome
+  // solo lo suyo (ver services/colaEnvio.js).
+  enRailway: EN_RAILWAY,
+  instancia: EN_RAILWAY ? 'railway' : `local:${require('os').hostname()}`,
 
   // --- Creatividades en Supabase Storage (punto 5 del plan) ---
   // Apagado hasta correr migration_006 (tabla creatividades): con 0 los
@@ -171,6 +188,7 @@ if (env.dataSource === 'supabase') {
 if (env.metaMode === 'real' && !env.metaAccessToken) {
   console.warn('[env] META_MODE=real pero META_ACCESS_TOKEN no está definido — las llamadas a Meta van a fallar.');
 }
-console.log(`[env] Meta: modo ${env.metaMode}${env.metaMode === 'real' ? ' (¡esto toca la cuenta de verdad, aunque siempre en PAUSED!)' : ''}`);
+console.log(`[env] Meta: modo ${env.metaMode}${env.metaMode === 'real' ? ' (¡esto toca la cuenta de verdad!)' : ''}`);
+console.log(`[env] Instancia "${env.instancia}" — lo automatizado sale ${env.automatizadoEstadoInicial} y la ingesta ${env.ingestaEstadoInicial}${env.enRailway ? ' (producción: ACTIVE salvo que la variable diga PAUSED)' : ' (fuera de Railway siempre PAUSED)'}`);
 
 module.exports = env;

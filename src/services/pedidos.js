@@ -408,7 +408,7 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
   // restricciones de qué se puede pedir.
   if (modoResuelto === 'automatizado') {
     if (!esTipoPermitidoAutomatizado(tipoInfo)) {
-      const err = new Error(`El Tipo "${tipoCodigo}" no está habilitado en Pedido Anuncios Automatizados — solo se puede pautar con Intensidad Media, Baja, o Pautas Army.`);
+      const err = new Error(`El Tipo "${tipoCodigo}" no está habilitado en Pedido Anuncios Automatizados — solo se puede pautar con Intensidad Media o Baja (Pautas Army y Alta van por Pedido Manual).`);
       err.status = 400;
       throw err;
     }
@@ -599,8 +599,21 @@ async function crearPedido(datos, usuario, { publicar = false, soloValidar = fal
     confirmadoPor: usuario.nombre,
   };
   if (enCola) {
-    encolar(correlationId, activoKey, () => terminarPedido(paramsTerminar));
-    return { correlationId, codigo, enCola: true, plataforma };
+    // El pedido queda a nombre de ESTE proceso (migración 017). Si no se
+    // puede anotar (columna sin crear), no se encola: se termina acá mismo,
+    // para que ningún otro proceso lo retome con otro estado inicial.
+    let conDueno = true;
+    try {
+      await updateRow('cola_pautas', 'correlation_id', correlationId, { envio_instancia: env.instancia });
+    } catch (e) {
+      conDueno = false;
+      console.warn('[pedidos] falta correr migration_017 (envio_instancia) — termino el pedido en el mismo request:', e.message);
+      await updateRow('cola_pautas', 'correlation_id', correlationId, { envio: '' }).catch(() => {});
+    }
+    if (conDueno) {
+      encolar(correlationId, activoKey, () => terminarPedido(paramsTerminar));
+      return { correlationId, codigo, enCola: true, plataforma };
+    }
   }
   return terminarPedido(paramsTerminar);
 }

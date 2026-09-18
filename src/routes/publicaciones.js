@@ -244,9 +244,10 @@ router.get('/tipos', async (req, res) => {
       // "0 – Automatización" no se elige a mano: es el Tipo de las pautas que
       // llegan solas desde las hojas salida_manual_* (Noticia Franca, El
       // Norte Ahora, Valle 24). La ingesta lo usa directo, sin pasar por acá.
-      // "Y – Pautas Army" tampoco (usuario, 2026-09-14): queda en la tabla
-      // solo para el histórico.
-      .filter((t) => String(t.codigo) !== '0' && String(t.codigo) !== 'Y');
+      // "Y – Pautas Army": se elige a mano SOLO en Pedido Manual (usuario,
+      // 2026-09-18). En Automatizado sigue afuera (ya lo saca
+      // esTipoPermitidoAutomatizado) — se había ocultado del todo el 14/9.
+      .filter((t) => String(t.codigo) !== '0');
     // Los Tipos Oficiales se llaman por la letra (A/B/C) en la tabla — para
     // el desplegable se muestran "B - Media" (letra - intensidad, pedido del
     // usuario 2026-09-12); lo que se escribe en Tareas no cambia.

@@ -78,6 +78,14 @@ router.put('/admin/proyectos/:proyecto', requireRol('administrador'), async (req
   }
 });
 
+// GET /api/admin/instancia — con qué estado sale lo que publica ESTE
+// proceso (producción: ACTIVE; una PC local: siempre PAUSED). Solo superadmin.
+router.get('/admin/instancia', requireRol('administrador'), (req, res) => {
+  if (!req.usuario.es_superadmin) return res.status(403).json({ error: 'Solo el superadmin.' });
+  const env = require('../config/env');
+  res.json({ instancia: env.instancia, enRailway: env.enRailway, automatizado: env.automatizadoEstadoInicial, ingesta: env.ingestaEstadoInicial, metaMode: env.metaMode });
+});
+
 // GET /api/admin/uso?dias=30 — resumen del registro de uso (solo superadmin,
 // ver services/eventosUso.js).
 router.get('/admin/uso', requireRol('administrador'), async (req, res) => {

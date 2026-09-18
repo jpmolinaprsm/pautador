@@ -46,7 +46,7 @@ const COLUMNAS = {
     'origen', 'tareas_replicado', 'tareas_error',
     'categoria_pieza', 'gobernador',
     'materiales',
-    'envio', 'envio_error', 'envio_actualizado',
+    'envio', 'envio_error', 'envio_actualizado', 'envio_instancia',
   ],
   ingesta_sheets: ['hoja', 'fila_id', 'correlation_id', 'estado', 'error', 'procesado_en'],
   creatividades: [
